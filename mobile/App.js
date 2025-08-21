@@ -1,3 +1,4 @@
+// App.js
 import React from 'react';
 import { NavigationContainer } from '@react-navigation/native';
 import { createStackNavigator } from '@react-navigation/stack';
@@ -10,29 +11,33 @@ import HomeScreen from './src/screens/HomeScreen';
 import HistoryScreen from './src/screens/HistoryScreen';
 import PatientsScreen from './src/screens/PatientsScreen';
 import PatientDetailScreen from './src/screens/PatientDetailScreen';
-import PatientConditionsScreen from './src/screens/PatientConditionsScreen'; // ADICIONADO
+import PatientConditionsScreen from './src/screens/PatientConditionsScreen';
 import NewAnalysisScreen from './src/screens/NewAnalysisScreen';
 import AnalysisResultScreen from './src/screens/AnalysisResultScreen';
+import AnalysisWaitScreen from './src/screens/AnalysisWaitScreen'; // <-- ADICIONADO
 import ProfileScreen from './src/screens/ProfileScreen';
 
 import { AuthProvider, useAuth } from './src/context/AuthContext';
-
+import './styles.css';
+// Reusa seu App padrão
+export { default } from './App';
 const Stack = createStackNavigator();
 const Tab = createBottomTabNavigator();
+
+// ajuste para seu backend
+const API_BASE = 'http://localhost:3001';
 
 const TabNavigator = () => {
   return (
     <Tab.Navigator
       screenOptions={({ route }) => ({
-        tabBarIcon: ({ focused, color, size }) => {
+        tabBarIcon: ({ color, size }) => {
           let iconName;
-          
           if (route.name === 'Home') iconName = 'home';
           else if (route.name === 'History') iconName = 'history';
           else if (route.name === 'Patients') iconName = 'people';
           else if (route.name === 'Analysis') iconName = 'analytics';
           else if (route.name === 'Profile') iconName = 'person';
-          
           return <Icon name={iconName} size={size} color={color} />;
         },
         tabBarActiveTintColor: '#1E3A8A',
@@ -51,19 +56,26 @@ const TabNavigator = () => {
 
 const AppNavigator = () => {
   const { user, loading } = useAuth();
-  
   if (loading) return null;
-  
+
   return (
     <NavigationContainer>
       <Stack.Navigator screenOptions={{ headerShown: false }}>
         {user ? (
           <>
             <Stack.Screen name="Main" component={TabNavigator} />
-            {/* CORREÇÃO: Sequência correta das telas de pacientes */}
+
+            {/* Fluxo de pacientes */}
             <Stack.Screen name="PatientConditions" component={PatientConditionsScreen} />
             <Stack.Screen name="PatientDetail" component={PatientDetailScreen} />
-            <Stack.Screen name="AnalysisResult" component={AnalysisResultScreen} />
+
+            {/* Espera da IA */}
+            <Stack.Screen name="AnalysisWait" options={{ headerShown: true, title: 'Processando análise...' }}>
+              {props => <AnalysisWaitScreen {...props} apiBase={API_BASE} />}
+            </Stack.Screen>
+
+            {/* Resultados */}
+            <Stack.Screen name="AnalysisResult" component={AnalysisResultScreen} options={{ headerShown: true, title: 'Resultados' }} />
           </>
         ) : (
           <>

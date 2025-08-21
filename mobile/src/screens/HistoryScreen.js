@@ -37,28 +37,69 @@ const HistoryScreen = ({ navigation }) => {
     try {
       const response = await axios.get('/analysis');
       console.log('Analyses response:', response.data);
-      setAnalyses(response.data || []);
+      
+      // Verificar se os dados têm a estrutura correta
+      const analysesData = response.data || [];
+      console.log('Total de análises encontradas:', analysesData.length);
+      
+      // Validar cada análise
+      const validAnalyses = analysesData.filter(analysis => {
+        const isValid = analysis && analysis.id;
+        if (!isValid) {
+          console.warn('Análise inválida encontrada:', analysis);
+        }
+        return isValid;
+      });
+      
+      setAnalyses(validAnalyses);
     } catch (error) {
       console.error('Erro ao buscar análises:', error);
-      // Mock data para desenvolvimento
+      Alert.alert(
+        'Erro',
+        'Não foi possível carregar o histórico de análises. Verifique sua conexão.',
+        [
+          { text: 'OK' },
+          { text: 'Tentar novamente', onPress: fetchAnalyses }
+        ]
+      );
+      
+      // Mock data para desenvolvimento/teste
       setAnalyses([
         {
-          id: '1',
+          id: 'mock-1',
+          title: 'Análise de Lesão Cutânea',
           diagnosis: 'Possível Psoríase com Superinfecção Bacteriana',
           symptoms: 'Lesão eritematosa com descamação',
           description: 'Paciente apresenta lesões características',
           status: 'completed',
           createdAt: new Date().toISOString(),
-          patient: { name: 'João Silva' }
+          patient: { name: 'João Silva' },
+          resultsCount: 3,
+          imagesCount: 2
         },
         {
-          id: '2',
+          id: 'mock-2',
+          title: 'Análise Dermatológica',
           diagnosis: 'Dermatite Atópica',
           symptoms: 'Coceira e vermelhidão',
           description: 'Quadro típico de dermatite',
           status: 'completed',
           createdAt: new Date(Date.now() - 86400000).toISOString(),
-          patient: { name: 'Maria Santos' }
+          patient: { name: 'Maria Santos' },
+          resultsCount: 2,
+          imagesCount: 1
+        },
+        {
+          id: 'mock-3',
+          title: 'Análise Geral',
+          diagnosis: 'Análise sem paciente específico',
+          symptoms: 'Lesão suspeita na pele',
+          description: 'Análise de imagem enviada',
+          status: 'completed',
+          createdAt: new Date(Date.now() - 172800000).toISOString(),
+          patient: null, // Análise sem paciente
+          resultsCount: 1,
+          imagesCount: 1
         }
       ]);
     } finally {
@@ -78,12 +119,17 @@ const HistoryScreen = ({ navigation }) => {
       return;
     }
 
-    const filtered = analyses.filter(analysis => 
-      analysis.diagnosis?.toLowerCase().includes(searchText.toLowerCase()) ||
-      analysis.symptoms?.toLowerCase().includes(searchText.toLowerCase()) ||
-      analysis.patient?.name?.toLowerCase().includes(searchText.toLowerCase()) ||
-      formatDate(analysis.createdAt).includes(searchText)
-    );
+    const filtered = analyses.filter(analysis => {
+      const searchLower = searchText.toLowerCase();
+      return (
+        analysis.diagnosis?.toLowerCase().includes(searchLower) ||
+        analysis.title?.toLowerCase().includes(searchLower) ||
+        analysis.symptoms?.toLowerCase().includes(searchLower) ||
+        analysis.description?.toLowerCase().includes(searchLower) ||
+        analysis.patient?.name?.toLowerCase().includes(searchLower) ||
+        formatDate(analysis.createdAt).includes(searchText)
+      );
+    });
     setFilteredAnalyses(filtered);
   };
 
@@ -140,32 +186,109 @@ const HistoryScreen = ({ navigation }) => {
   };
 
   const navigateToResult = (analysis) => {
-    navigation.navigate('AnalysisResult', { analysis });
+    console.log('Navegando para análise:', analysis.id);
+    
+    // Verificar se a análise tem ID válido
+    if (!analysis || !analysis.id) {
+      Alert.alert('Erro', 'Análise inválida. Não é possível visualizar os resultados.');
+      return;
+    }
+
+    // Verificar se a análise está completa
+    if (analysis.status === 'pending' || analysis.status === 'processing') {
+      Alert.alert(
+        'Análise em andamento',
+        'Esta análise ainda está sendo processada. Tente novamente em alguns instantes.',
+        [{ text: 'OK' }]
+      );
+      return;
+    }
+
+    if (analysis.status === 'failed') {
+      Alert.alert(
+        'Análise com erro',
+        'Esta análise falhou durante o processamento. Tente reprocessá-la.',
+        [{ text: 'OK' }]
+      );
+      return;
+    }
+
+    navigation.navigate('AnalysisResult', { 
+      analysis: analysis,
+      analysisId: analysis.id  // Passar o ID separadamente também
+    });
+  };
+
+  const getStatusColor = (status) => {
+    switch (status) {
+      case 'completed': return '#10b981';
+      case 'processing': return '#f59e0b';
+      case 'pending': return '#6b7280';
+      case 'failed': return '#ef4444';
+      default: return '#6b7280';
+    }
+  };
+
+  const getStatusText = (status) => {
+    switch (status) {
+      case 'completed': return 'Concluída';
+      case 'processing': return 'Processando';
+      case 'pending': return 'Pendente';
+      case 'failed': return 'Erro';
+      default: return 'Desconhecido';
+    }
   };
 
   const AnalysisItem = ({ analysis }) => (
     <TouchableOpacity 
       style={styles.analysisItem}
       onPress={() => navigateToResult(analysis)}
+      disabled={!analysis.id} // Desabilitar se não tiver ID
     >
       <View style={styles.analysisContent}>
-        <Text style={styles.analysisTitle} numberOfLines={1}>
-          {analysis.diagnosis || 'Diagnóstico não especificado'}
-        </Text>
+        <View style={styles.analysisHeader}>
+          <Text style={styles.analysisTitle} numberOfLines={1}>
+            {analysis.diagnosis || analysis.title || 'Diagnóstico não especificado'}
+          </Text>
+          <View style={[styles.statusBadge, { backgroundColor: getStatusColor(analysis.status) }]}>
+            <Text style={styles.statusText}>{getStatusText(analysis.status)}</Text>
+          </View>
+        </View>
+        
         <Text style={styles.analysisTime}>
           {formatDate(analysis.createdAt)} • {formatTime(analysis.createdAt)}
         </Text>
-        {analysis.patient?.name && (
+        
+        {analysis.patient?.name ? (
           <Text style={styles.analysisPatient}>
             Paciente: {analysis.patient.name}
           </Text>
+        ) : (
+          <Text style={styles.analysisPatient}>
+            Análise geral (sem paciente específico)
+          </Text>
         )}
+        
         {analysis.symptoms && (
           <Text style={styles.analysisSymptoms} numberOfLines={2}>
             {analysis.symptoms}
           </Text>
         )}
+        
+        <View style={styles.analysisStats}>
+          {analysis.resultsCount > 0 && (
+            <Text style={styles.statText}>
+              {analysis.resultsCount} resultado{analysis.resultsCount > 1 ? 's' : ''}
+            </Text>
+          )}
+          {analysis.imagesCount > 0 && (
+            <Text style={styles.statText}>
+              {analysis.imagesCount} imagem{analysis.imagesCount > 1 ? 'ns' : ''}
+            </Text>
+          )}
+        </View>
       </View>
+      
       <Icon name="chevron-right" size={24} color="#64748b" />
     </TouchableOpacity>
   );
@@ -205,7 +328,7 @@ const HistoryScreen = ({ navigation }) => {
         <Icon name="search" size={20} color="#64748b" style={styles.searchIcon} />
         <TextInput
           style={styles.searchInput}
-          placeholder="Pesquise por tópico ou data"
+          placeholder="Pesquise por tópico, paciente ou data"
           placeholderTextColor="#64748b"
           value={searchText}
           onChangeText={setSearchText}
@@ -356,11 +479,28 @@ const styles = StyleSheet.create({
   analysisContent: {
     flex: 1,
   },
+  analysisHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'flex-start',
+    marginBottom: 4,
+  },
   analysisTitle: {
+    flex: 1,
     fontSize: 16,
     fontWeight: '600',
     color: '#1e293b',
-    marginBottom: 4,
+    marginRight: 10,
+  },
+  statusBadge: {
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    borderRadius: 12,
+  },
+  statusText: {
+    fontSize: 10,
+    fontWeight: 'bold',
+    color: '#fff',
   },
   analysisTime: {
     fontSize: 12,
@@ -376,6 +516,15 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: '#64748b',
     lineHeight: 18,
+    marginBottom: 6,
+  },
+  analysisStats: {
+    flexDirection: 'row',
+    gap: 15,
+  },
+  statText: {
+    fontSize: 12,
+    color: '#94a3b8',
   },
   fab: {
     position: 'absolute',

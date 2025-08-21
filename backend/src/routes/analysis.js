@@ -1,392 +1,831 @@
-const { Analysis, AnalysisResult, MedicalImage, Patient } = require('../models');
-const OpenAI = require('openai');
-const fs = require('fs');
+const express = require('express');
+const multer = require('multer');
 const path = require('path');
+const { Analysis, AnalysisResult, MedicalImage, Patient, Subscription } = require('../models');
+const { authenticate } = require('../middleware/auth');
+const { processWithAI } = require('../services/aiService');
+const router = express.Router();
 
-// Configurar OpenAI
-const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY, // Adicione sua chave da OpenAI no .env
+// Configuração do multer para upload de arquivos
+const storage = multer.diskStorage({
+  destination: (req, file, cb) => {
+    const uploadPath = path.join(__dirname, '../uploads/medical-images');
+    cb(null, uploadPath);
+  },
+  filename: (req, file, cb) => {
+    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
+    cb(null, file.fieldname + '-' + uniqueSuffix + path.extname(file.originalname));
+  }
 });
 
-const processWithAI = async (analysisId) => {
+const upload = multer({
+  storage: storage,
+  limits: {
+    fileSize: 50 * 1024 * 1024, // 50MB limit
+  },
+  fileFilter: (req, file, cb) => {
+    if (file.fieldname === 'images') {
+      // Verificar se é imagem
+      if (file.mimetype.startsWith('image/')) {
+        cb(null, true);
+      } else {
+        cb(new Error('Apenas imagens são permitidas'), false);
+      }
+    } else if (file.fieldname === 'documents') {
+      // Verificar se é documento permitido
+      const allowedTypes = ['application/pdf', 'image/jpeg', 'image/png', 'image/gif'];
+      if (allowedTypes.includes(file.mimetype)) {
+        cb(null, true);
+      } else {
+        cb(new Error('Apenas PDF e imagens são permitidos para documentos'), false);
+      }
+    } else {
+      cb(new Error('Campo de arquivo não reconhecido'), false);
+    }
+  }
+});
+
+// GET /api/analysis - Listar todas as análises do médico
+router.get('/', authenticate, async (req, res) => {
   try {
-    const analysis = await Analysis.findByPk(analysisId, {
+    const analyses = await Analysis.findAll({
+      where: { doctorId: req.user.userId },
       include: [
-        { model: MedicalImage },
-        { model: Patient }
+        {
+          model: Patient,
+          attributes: ['id', 'name', 'email'],
+          required: false // LEFT JOIN para incluir análises sem paciente
+        },
+        {
+          model: AnalysisResult,
+          attributes: ['id', 'category', 'result', 'confidenceScore', 'isCompleted'],
+          required: false
+        },
+        {
+          model: MedicalImage,
+          attributes: ['id', 'filename', 'originalName', 'imageType'],
+          required: false
+        }
+      ],
+      order: [['createdAt', 'DESC']]
+    });
+
+    // Formattar resposta para o frontend
+    const formattedAnalyses = analyses.map(analysis => ({
+      id: analysis.id,
+      title: analysis.title,
+      description: analysis.description,
+      symptoms: analysis.symptoms,
+      status: analysis.status,
+      aiConfidenceScore: analysis.aiConfidenceScore,
+      createdAt: analysis.createdAt,
+      updatedAt: analysis.updatedAt,
+      patient: analysis.Patient ? {
+        id: analysis.Patient.id,
+        name: analysis.Patient.name,
+        email: analysis.Patient.email
+      } : null,
+      resultsCount: analysis.AnalysisResults ? analysis.AnalysisResults.length : 0,
+      imagesCount: analysis.MedicalImages ? analysis.MedicalImages.length : 0,
+      // Para compatibilidade com o frontend, extrair diagnóstico principal
+      diagnosis: analysis.AnalysisResults && analysis.AnalysisResults.length > 0 
+        ? analysis.AnalysisResults.find(r => r.category.includes('Diagnóstico') || r.category.includes('Diagnostico'))?.result || analysis.title
+        : analysis.title
+    }));
+
+    res.json(formattedAnalyses);
+  } catch (error) {
+    console.error('Error fetching analyses:', error);
+    res.status(500).json({ error: 'Erro ao buscar análises' });
+  }
+});
+
+// POST /api/analysis - Criar nova análise
+router.post('/', authenticate, upload.fields([
+  { name: 'images', maxCount: 5 },
+  { name: 'documents', maxCount: 3 }
+]), async (req, res) => {
+  try {
+    const { title, description, symptoms, patientId } = req.body;
+    const doctorId = req.user.userId;
+
+    console.log('📝 Nova análise recebida:', {
+      title,
+      description: description?.length || 0,
+      symptoms: symptoms?.length || 0,
+      patientId: patientId || 'sem paciente',
+      doctorId,
+      images: req.files?.images?.length || 0,
+      documents: req.files?.documents?.length || 0
+    });
+
+    // Verificar limite de análises do plano
+    const subscription = await Subscription.findOne({
+      where: { userId: doctorId }
+    });
+
+    if (subscription) {
+      if (subscription.analysisUsed >= subscription.analysisLimit) {
+        return res.status(400).json({ 
+          error: 'Limite de análises atingido para seu plano atual',
+          currentUsage: subscription.analysisUsed,
+          limit: subscription.analysisLimit
+        });
+      }
+    }
+
+    // Validação básica
+    if (!title && !description && !symptoms && (!req.files || (!req.files.images && !req.files.documents))) {
+      return res.status(400).json({ 
+        error: 'Forneça pelo menos um título, descrição, sintomas ou arquivo para análise' 
+      });
+    }
+
+    // Verificar se o paciente existe (apenas se fornecido)
+    if (patientId && patientId !== '' && patientId !== 'null') {
+      const patient = await Patient.findOne({
+        where: { id: patientId, doctorId }
+      });
+      
+      if (!patient) {
+        return res.status(404).json({ error: 'Paciente não encontrado' });
+      }
+    }
+
+    // Normalizar patientId (converter strings vazias e 'null' para null)
+    const normalizedPatientId = (patientId && patientId !== '' && patientId !== 'null') ? patientId : null;
+
+    // Criar análise
+    const analysis = await Analysis.create({
+      title: title || 'Análise Médica',
+      description: description || null,
+      symptoms: symptoms || null,
+      status: 'pending',
+      patientId: normalizedPatientId,
+      doctorId: doctorId
+    });
+
+    console.log('✅ Análise criada:', analysis.id, 'para paciente:', normalizedPatientId || 'sem paciente');
+
+    // Salvar imagens médicas
+    if (req.files && req.files.images) {
+      for (const imageFile of req.files.images) {
+        await MedicalImage.create({
+          filename: imageFile.filename,
+          originalName: imageFile.originalname,
+          filePath: imageFile.path,
+          fileSize: imageFile.size,
+          mimeType: imageFile.mimetype,
+          imageType: getImageType(imageFile.mimetype),
+          analysisId: analysis.id
+        });
+        console.log('📸 Imagem salva:', imageFile.originalname);
+      }
+    }
+
+    // Salvar documentos como imagens médicas também
+    if (req.files && req.files.documents) {
+      for (const docFile of req.files.documents) {
+        await MedicalImage.create({
+          filename: docFile.filename,
+          originalName: docFile.originalname,
+          filePath: docFile.path,
+          fileSize: docFile.size,
+          mimeType: docFile.mimetype,
+          imageType: 'other',
+          analysisId: analysis.id
+        });
+        console.log('📄 Documento salvo:', docFile.originalname);
+      }
+    }
+
+    // Atualizar contador de análises usadas
+    if (subscription) {
+      await subscription.increment('analysisUsed');
+      console.log(`📊 Análises usadas: ${subscription.analysisUsed + 1}/${subscription.analysisLimit}`);
+    }
+
+    // Iniciar processamento com IA em background
+    console.log('🤖 Iniciando processamento com IA...');
+    processWithAI(analysis.id).catch(error => {
+      console.error('❌ Erro no processamento de IA:', error);
+    });
+
+    // Resposta imediata para o frontend
+    res.status(201).json({
+      message: 'Análise criada com sucesso',
+      analysis: {
+        id: analysis.id,
+        title: analysis.title,
+        description: analysis.description,
+        symptoms: analysis.symptoms,
+        status: analysis.status,
+        createdAt: analysis.createdAt,
+        patientId: analysis.patientId,
+        doctorId: analysis.doctorId
+      }
+    });
+
+  } catch (error) {
+    console.error('❌ Erro ao criar análise:', error);
+    res.status(500).json({ 
+      error: 'Erro interno do servidor',
+      details: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+});
+
+// GET /api/analysis/:id - Buscar análise específica
+router.get('/:id', authenticate, async (req, res) => {
+  try {
+    const { id } = req.params;
+    
+    const analysis = await Analysis.findOne({
+      where: { 
+        id,
+        doctorId: req.user.userId
+      },
+      include: [
+        {
+          model: Patient,
+          attributes: ['id', 'name', 'email', 'birthDate', 'gender', 'medicalHistory', 'allergies'],
+          required: false // LEFT JOIN para incluir análises sem paciente
+        },
+        {
+          model: AnalysisResult,
+          order: [['createdAt', 'ASC']],
+          required: false
+        },
+        {
+          model: MedicalImage,
+          attributes: ['id', 'filename', 'originalName', 'imageType', 'mimeType', 'createdAt'],
+          required: false
+        }
       ]
     });
 
     if (!analysis) {
-      throw new Error('Análise não encontrada');
+      return res.status(404).json({ error: 'Análise não encontrada' });
     }
 
-    console.log(`🤖 Iniciando análise de IA real para: ${analysis.title}`);
-
-    // Atualizar status para processando
-    await analysis.update({ status: 'processing' });
-
-    // Preparar prompt médico especializado
-    const medicalPrompt = await buildMedicalPrompt(analysis);
-    
-    // Processar imagens se houver
-    let imageAnalysis = '';
-    if (analysis.MedicalImages && analysis.MedicalImages.length > 0) {
-      imageAnalysis = await analyzeImages(analysis.MedicalImages);
-    }
-
-    // Realizar análise médica completa com OpenAI
-    const aiAnalysis = await performMedicalAnalysis(medicalPrompt, imageAnalysis);
-
-    // Salvar resultados no banco
-    const savedResults = await saveAnalysisResults(analysis.id, aiAnalysis);
-
-    // Calcular confiança média
-    const avgConfidence = savedResults.reduce((acc, r) => acc + r.confidenceScore, 0) / savedResults.length;
-
-    // Atualizar análise como concluída
-    await analysis.update({
-      status: 'completed',
-      aiConfidenceScore: avgConfidence
-    });
-
-    console.log(`✅ Análise de IA concluída: ${analysis.title} (${Math.round(avgConfidence * 100)}% confiança)`);
-
-    // Notificar via Socket.IO se disponível
-    if (global.socketIO) {
-      global.socketIO.to(`doctor_${analysis.doctorId}`).emit('analysis_completed', {
-        analysisId: analysis.id,
-        title: analysis.title,
-        confidence: avgConfidence,
-        resultsCount: savedResults.length,
-        message: 'Análise de IA concluída com sucesso!'
-      });
-    }
-
-    return {
-      success: true,
-      analysisId: analysis.id,
-      confidence: avgConfidence,
-      resultsCount: savedResults.length
-    };
-
+    res.json(analysis);
   } catch (error) {
-    console.error('❌ Erro no processamento de IA:', error);
-    
-    // Marcar como falhou
-    await Analysis.update(
-      { status: 'failed' }, 
-      { where: { id: analysisId } }
-    );
-    
-    throw error;
+    console.error('Error fetching analysis:', error);
+    res.status(500).json({ error: 'Erro ao buscar análise' });
   }
-};
+});
 
-const buildMedicalPrompt = async (analysis) => {
-  const patient = analysis.Patient;
-  
-  return `
-ANÁLISE MÉDICA ESPECIALIZADA
-
-DADOS DO PACIENTE:
-- Nome: ${patient?.name || 'Não informado'}
-- Idade: ${patient?.birthDate ? calculateAge(patient.birthDate) : 'Não informada'}
-- Gênero: ${patient?.gender || 'Não informado'}
-- Histórico médico: ${patient?.medicalHistory || 'Não informado'}
-- Alergias: ${patient?.allergies || 'Não informadas'}
-
-CASO CLÍNICO:
-- Título: ${analysis.title}
-- Descrição: ${analysis.description || 'Não fornecida'}
-- Sintomas/Exame físico: ${analysis.symptoms || 'Não fornecidos'}
-
-INSTRUÇÕES:
-Você é um médico especialista com vasta experiência. Realize uma análise médica completa e detalhada do caso apresentado.
-
-Sua resposta deve ser em formato JSON válido com exatamente estas 7 categorias:
-
-{
-  "diagnostico_principal": {
-    "resultado": "Diagnóstico mais provável baseado nos dados apresentados",
-    "confianca": 0.85,
-    "justificativa": "Explicação detalhada do raciocínio diagnóstico"
-  },
-  "etiologia": {
-    "resultado": "Possíveis causas e fatores etiológicos",
-    "confianca": 0.80,
-    "justificativa": "Base científica para as causas propostas"
-  },
-  "fisiopatologia": {
-    "resultado": "Mecanismos fisiopatológicos envolvidos",
-    "confianca": 0.82,
-    "justificativa": "Explicação dos processos biológicos"
-  },
-  "apresentacao_clinica": {
-    "resultado": "Características clínicas típicas e variações",
-    "confianca": 0.88,
-    "justificativa": "Correlação com o quadro apresentado"
-  },
-  "abordagem_diagnostica": {
-    "resultado": "Exames complementares e critérios diagnósticos recomendados",
-    "confianca": 0.85,
-    "justificativa": "Estratégia diagnóstica baseada em evidências"
-  },
-  "abordagem_terapeutica": {
-    "resultado": "Opções de tratamento e manejo clínico",
-    "confianca": 0.83,
-    "justificativa": "Recomendações terapêuticas fundamentadas"
-  },
-  "guia_prescricao": {
-    "resultado": "Prescrições específicas com dosagens e orientações",
-    "confianca": 0.86,
-    "justificativa": "Base farmacológica e posológica"
-  }
-}
-
-IMPORTANTE:
-- Use conhecimento médico atualizado e baseado em evidências
-- Seja específico e detalhado em cada categoria
-- Valores de confiança devem ser realistas (0.7 a 0.95)
-- Responda apenas com JSON válido, sem texto adicional
-- Use terminologia médica apropriada
-- Considere diagnósticos diferenciais quando relevante
-`;
-};
-
-const analyzeImages = async (medicalImages) => {
+// GET /api/analysis/:id/results - Buscar resultados de uma análise específica
+router.get('/:id/results', authenticate, async (req, res) => {
   try {
-    console.log(`🖼️ Analisando ${medicalImages.length} imagem(ns) médica(s)`);
+    const { id } = req.params;
     
-    const imageAnalyses = [];
-    
-    for (const image of medicalImages) {
-      try {
-        // Verificar se o arquivo existe
-        if (!fs.existsSync(image.filePath)) {
-          console.warn(`Arquivo de imagem não encontrado: ${image.filePath}`);
-          continue;
-        }
-
-        // Converter imagem para base64
-        const imageBuffer = fs.readFileSync(image.filePath);
-        const base64Image = imageBuffer.toString('base64');
-        const mimeType = image.mimeType || 'image/jpeg';
-
-        // Analisar imagem com GPT-4 Vision
-        const response = await openai.chat.completions.create({
-          model: "gpt-4-vision-preview",
-          messages: [
-            {
-              role: "user",
-              content: [
-                {
-                  type: "text",
-                  text: `Analise esta imagem médica em detalhes. Descreva:
-1. Tipo de imagem/exame
-2. Achados visuais relevantes
-3. Possíveis diagnósticos baseados na imagem
-4. Características anatômicas observadas
-5. Sinais patológicos identificados
-
-Seja preciso e use terminologia médica apropriada.`
-                },
-                {
-                  type: "image_url",
-                  image_url: {
-                    url: `data:${mimeType};base64,${base64Image}`,
-                    detail: "high"
-                  }
-                }
-              ]
-            }
-          ],
-          max_tokens: 1000,
-          temperature: 0.3
-        });
-
-        const imageAnalysis = response.choices[0].message.content;
-        imageAnalyses.push({
-          filename: image.originalName,
-          analysis: imageAnalysis
-        });
-
-        console.log(`✅ Imagem analisada: ${image.originalName}`);
-
-      } catch (imageError) {
-        console.error(`Erro ao analisar imagem ${image.originalName}:`, imageError);
-        imageAnalyses.push({
-          filename: image.originalName,
-          analysis: 'Não foi possível analisar esta imagem devido a limitações técnicas.'
-        });
-      }
-    }
-
-    return imageAnalyses.length > 0 ? 
-      `\nANÁLISE DAS IMAGENS MÉDICAS:\n${imageAnalyses.map(img => 
-        `${img.filename}: ${img.analysis}`
-      ).join('\n\n')}` : '';
-
-  } catch (error) {
-    console.error('Erro na análise de imagens:', error);
-    return '';
-  }
-};
-
-const performMedicalAnalysis = async (prompt, imageAnalysis) => {
-  try {
-    console.log('🧠 Realizando análise médica com OpenAI...');
-
-    const fullPrompt = prompt + imageAnalysis;
-
-    const response = await openai.chat.completions.create({
-      model: "gpt-4-turbo-preview", // Modelo mais avançado
-      messages: [
+    const analysis = await Analysis.findOne({
+      where: { 
+        id,
+        doctorId: req.user.userId
+      },
+      include: [
         {
-          role: "system",
-          content: `Você é um médico especialista altamente qualificado com conhecimento médico atualizado. 
-          Forneça análises médicas precisas, detalhadas e baseadas em evidências científicas.
-          Sempre responda em formato JSON válido conforme solicitado.
-          Use conhecimento médico de guidelines internacionais atualizados.`
+          model: Patient,
+          attributes: ['id', 'name', 'email', 'birthDate', 'gender', 'medicalHistory', 'allergies'],
+          required: false // LEFT JOIN para incluir análises sem paciente
         },
         {
-          role: "user",
-          content: fullPrompt
+          model: AnalysisResult,
+          order: [['createdAt', 'ASC']],
+          required: false
+        },
+        {
+          model: MedicalImage,
+          attributes: ['id', 'filename', 'originalName', 'imageType', 'mimeType', 'createdAt'],
+          required: false
         }
-      ],
-      temperature: 0.3, // Baixa temperatura para respostas mais precisas
-      max_tokens: 4000,
-      response_format: { type: "json_object" } // Garantir resposta em JSON
+      ]
     });
 
-    const aiResponse = response.choices[0].message.content;
-    console.log('✅ Resposta da OpenAI recebida');
-
-    // Parse e validação do JSON
-    let analysisData;
-    try {
-      analysisData = JSON.parse(aiResponse);
-    } catch (parseError) {
-      console.error('Erro ao fazer parse do JSON da OpenAI:', parseError);
-      throw new Error('Resposta da IA em formato inválido');
+    if (!analysis) {
+      return res.status(404).json({ error: 'Análise não encontrada' });
     }
 
-    return analysisData;
-
+    res.json(analysis);
   } catch (error) {
-    console.error('Erro na análise médica:', error);
-    
-    // Fallback em caso de erro da OpenAI
-    return {
-      diagnostico_principal: {
-        resultado: 'Análise médica temporariamente indisponível. Consulte um médico especialista.',
-        confianca: 0.5,
-        justificativa: 'Erro técnico no processamento da IA médica.'
-      },
-      etiologia: {
-        resultado: 'Avaliação etiológica requer consulta médica presencial.',
-        confianca: 0.5,
-        justificativa: 'Limitação técnica do sistema.'
-      },
-      fisiopatologia: {
-        resultado: 'Análise fisiopatológica requer avaliação médica especializada.',
-        confianca: 0.5,
-        justificativa: 'Erro no processamento automatizado.'
-      },
-      apresentacao_clinica: {
-        resultado: 'Apresentação clínica deve ser avaliada por médico qualificado.',
-        confianca: 0.5,
-        justificativa: 'Sistema de IA temporariamente indisponível.'
-      },
-      abordagem_diagnostica: {
-        resultado: 'Consulte médico especialista para abordagem diagnóstica adequada.',
-        confianca: 0.5,
-        justificativa: 'Recomendação de segurança médica.'
-      },
-      abordagem_terapeutica: {
-        resultado: 'Tratamento deve ser prescrito exclusivamente por médico habilitado.',
-        confianca: 0.5,
-        justificativa: 'Protocolo de segurança médica.'
-      },
-      guia_prescricao: {
-        resultado: 'Prescrições devem ser feitas exclusivamente por médico responsável.',
-        confianca: 0.5,
-        justificativa: 'Exigência legal e ética médica.'
-      }
-    };
+    console.error('Error fetching analysis results:', error);
+    res.status(500).json({ error: 'Erro ao buscar resultados da análise' });
   }
-};
+});
 
-const saveAnalysisResults = async (analysisId, aiAnalysis) => {
+// PUT /api/analysis/:id/status - Atualizar status da análise
+router.put('/:id/status', authenticate, async (req, res) => {
   try {
-    console.log('💾 Salvando resultados da análise...');
-
-    const categoryMapping = {
-      'diagnostico_principal': 'Diagnóstico Principal',
-      'etiologia': 'Etiologia',
-      'fisiopatologia': 'Fisiopatologia', 
-      'apresentacao_clinica': 'Apresentação Clínica',
-      'abordagem_diagnostica': 'Abordagem Diagnóstica',
-      'abordagem_terapeutica': 'Abordagem Terapêutica',
-      'guia_prescricao': 'Guia de Prescrição'
-    };
-
-    const savedResults = [];
-
-    for (const [key, categoryName] of Object.entries(categoryMapping)) {
-      const categoryData = aiAnalysis[key];
-      
-      if (categoryData) {
-        const result = await AnalysisResult.create({
-          category: categoryName,
-          result: categoryData.resultado || 'Resultado não disponível',
-          confidenceScore: categoryData.confianca || 0.5,
-          aiModel: 'GPT-4-Turbo',
-          isCompleted: true,
-          analysisId: analysisId,
-          justification: categoryData.justificativa || '' // Campo adicional para justificativa
-        });
-
-        savedResults.push(result);
-        console.log(`✅ Salvo: ${categoryName}`);
-      }
+    const { id } = req.params;
+    const { status } = req.body;
+    
+    const validStatuses = ['pending', 'processing', 'completed', 'failed'];
+    if (!validStatuses.includes(status)) {
+      return res.status(400).json({ error: 'Status inválido' });
     }
 
-    console.log(`💾 ${savedResults.length} resultados salvos com sucesso`);
-    return savedResults;
+    const analysis = await Analysis.findOne({
+      where: { 
+        id,
+        doctorId: req.user.userId
+      }
+    });
 
+    if (!analysis) {
+      return res.status(404).json({ error: 'Análise não encontrada' });
+    }
+
+    await analysis.update({ status });
+
+    res.json({
+      message: 'Status atualizado com sucesso',
+      analysis: {
+        id: analysis.id,
+        status: analysis.status,
+        updatedAt: analysis.updatedAt
+      }
+    });
   } catch (error) {
-    console.error('Erro ao salvar resultados:', error);
-    throw error;
+    console.error('Error updating analysis status:', error);
+    res.status(500).json({ error: 'Erro ao atualizar status da análise' });
   }
+});
+
+// DELETE /api/analysis/:id - Deletar análise
+router.delete('/:id', authenticate, async (req, res) => {
+  try {
+    const { id } = req.params;
+    
+    const analysis = await Analysis.findOne({
+      where: { 
+        id,
+        doctorId: req.user.userId
+      }
+    });
+
+    if (!analysis) {
+      return res.status(404).json({ error: 'Análise não encontrada' });
+    }
+
+    // Deletar análise (cascade delete cuidará dos resultados e imagens)
+    await analysis.destroy();
+
+    res.json({ message: 'Análise deletada com sucesso' });
+  } catch (error) {
+    console.error('Error deleting analysis:', error);
+    res.status(500).json({ error: 'Erro ao deletar análise' });
+  }
+});
+
+// POST /api/analysis/:id/reprocess - Reprocessar análise com IA
+router.post('/:id/reprocess', authenticate, async (req, res) => {
+  try {
+    const { id } = req.params;
+    
+    const analysis = await Analysis.findOne({
+      where: { 
+        id,
+        doctorId: req.user.userId
+      }
+    });
+
+    if (!analysis) {
+      return res.status(404).json({ error: 'Análise não encontrada' });
+    }
+
+    // Resetar status e remover resultados anteriores
+    await AnalysisResult.destroy({
+      where: { analysisId: id }
+    });
+
+    await analysis.update({ 
+      status: 'pending',
+      aiConfidenceScore: null
+    });
+
+    // Reprocessar com IA
+    console.log('🔄 Reprocessando análise com IA:', id);
+    processWithAI(analysis.id).catch(error => {
+      console.error('❌ Erro no reprocessamento:', error);
+    });
+
+    res.json({
+      message: 'Análise enviada para reprocessamento',
+      analysis: {
+        id: analysis.id,
+        status: analysis.status
+      }
+    });
+  } catch (error) {
+    console.error('Error reprocessing analysis:', error);
+    res.status(500).json({ error: 'Erro ao reprocessar análise' });
+  }
+});
+
+// Função auxiliar para determinar tipo de imagem
+function getImageType(mimeType) {const express = require('express');
+const multer = require('multer');
+const fs = require('fs');
+const path = require('path');
+const { Analysis, AnalysisResult, MedicalImage, Patient, Subscription } = require('../models');
+const { authenticate } = require('../middleware/auth');
+const { processWithAI } = require('../services/aiService');
+
+const router = express.Router();
+
+// Garante que a pasta de upload exista
+const uploadPath = path.join(__dirname, '../uploads/medical-images');
+fs.mkdirSync(uploadPath, { recursive: true });
+
+// Configuração do multer para upload de arquivos
+const storage = multer.diskStorage({
+  destination: (req, file, cb) => {
+    cb(null, uploadPath);
+  },
+  filename: (req, file, cb) => {
+    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1e9);
+    cb(null, file.fieldname + '-' + uniqueSuffix + path.extname(file.originalname));
+  }
+});
+
+const upload = multer({
+  storage: storage,
+  limits: { fileSize: 50 * 1024 * 1024 }, // 50MB
+  fileFilter: (req, file, cb) => {
+    if (file.fieldname === 'images') {
+      if (file.mimetype.startsWith('image/')) return cb(null, true);
+      return cb(new Error('Apenas imagens são permitidas'), false);
+    }
+    if (file.fieldname === 'documents') {
+      const allowed = ['application/pdf', 'image/jpeg', 'image/png', 'image/gif'];
+      if (allowed.includes(file.mimetype)) return cb(null, true);
+      return cb(new Error('Apenas PDF e imagens são permitidos para documentos'), false);
+    }
+    return cb(new Error('Campo de arquivo não reconhecido'), false);
+  }
+});
+
+// Util: normalizar patientId vindo do body/form-data
+const normalizeId = (v) => {
+  if (v === undefined || v === null) return null;
+  const s = String(v).trim().toLowerCase();
+  if (s === '' || s === 'null' || s === 'undefined') return null;
+  const n = Number(s);
+  return Number.isFinite(n) ? n : null;
 };
 
-// Função auxiliar para calcular idade
-const calculateAge = (birthDate) => {
-  const today = new Date();
-  const birth = new Date(birthDate);
-  let age = today.getFullYear() - birth.getFullYear();
-  const monthDiff = today.getMonth() - birth.getMonth();
-  
-  if (monthDiff < 0 || (monthDiff === 0 && today.getDate() < birth.getDate())) {
-    age--;
-  }
-  
-  return `${age} anos`;
-};
+// GET /api/analysis - Listar todas as análises do médico
+router.get('/', authenticate, async (req, res) => {
+  try {
+    const analyses = await Analysis.findAll({
+      where: { doctorId: req.user.userId },
+      include: [
+        {
+          model: Patient,
+          attributes: ['id', 'name', 'email'],
+          required: false // LEFT JOIN para permitir analyses sem paciente
+        },
+        {
+          model: AnalysisResult,
+          attributes: ['id', 'category', 'result', 'confidenceScore', 'isCompleted'],
+          required: false
+        },
+        {
+          model: MedicalImage,
+          attributes: ['id', 'filename', 'originalName', 'imageType'],
+          required: false
+        }
+      ],
+      order: [['createdAt', 'DESC']]
+    });
 
-// Função para validar configuração da OpenAI
-const validateOpenAIConfig = () => {
-  if (!process.env.OPENAI_API_KEY) {
-    console.error('❌ OPENAI_API_KEY não configurada no arquivo .env');
-    return false;
-  }
-  
-  console.log('✅ OpenAI configurada corretamente');
-  return true;
-};
+    const formatted = analyses.map(analysis => ({
+      id: analysis.id,
+      title: analysis.title,
+      description: analysis.description,
+      symptoms: analysis.symptoms,
+      status: analysis.status,
+      aiConfidenceScore: analysis.aiConfidenceScore,
+      createdAt: analysis.createdAt,
+      updatedAt: analysis.updatedAt,
+      patient: analysis.Patient ? {
+        id: analysis.Patient.id,
+        name: analysis.Patient.name,
+        email: analysis.Patient.email
+      } : null,
+      resultsCount: analysis.AnalysisResults ? analysis.AnalysisResults.length : 0,
+      imagesCount: analysis.MedicalImages ? analysis.MedicalImages.length : 0,
+      diagnosis:
+        (analysis.AnalysisResults && analysis.AnalysisResults.length > 0)
+          ? (analysis.AnalysisResults.find(r =>
+              (r.category || '').includes('Diagnóstico') || (r.category || '').includes('Diagnostico')
+            )?.result || analysis.title)
+          : analysis.title
+    }));
 
-module.exports = { 
-  processWithAI, 
-  validateOpenAIConfig 
-};
+    res.json(formatted);
+  } catch (error) {
+    console.error('Error fetching analyses:', error);
+    res.status(500).json({ error: 'Erro ao buscar análises' });
+  }
+});
+
+// POST /api/analysis - Criar nova análise (patientId opcional)
+router.post(
+  '/',
+  authenticate,
+  upload.fields([{ name: 'images', maxCount: 5 }, { name: 'documents', maxCount: 3 }]),
+  async (req, res) => {
+    try {
+      const { title, description, symptoms, patientId } = req.body;
+      const doctorId = req.user.userId;
+      const parsedPatientId = normalizeId(patientId);
+
+      console.log('📝 Nova análise recebida:', {
+        title,
+        description: description?.length || 0,
+        symptoms: symptoms?.length || 0,
+        patientId: parsedPatientId ?? 'sem paciente',
+        doctorId,
+        images: req.files?.images?.length || 0,
+        documents: req.files?.documents?.length || 0
+      });
+
+      // Verifica limite do plano
+      const subscription = await Subscription.findOne({ where: { userId: doctorId } });
+      if (subscription && subscription.analysisUsed >= subscription.analysisLimit) {
+        return res.status(400).json({
+          error: 'Limite de análises atingido para seu plano atual',
+          currentUsage: subscription.analysisUsed,
+          limit: subscription.analysisLimit
+        });
+      }
+
+      // Validação básica (patientId é opcional)
+      const hasAnyContent =
+        Boolean(title) || Boolean(description) || Boolean(symptoms) ||
+        Boolean(req.files?.images?.length) || Boolean(req.files?.documents?.length);
+      if (!hasAnyContent) {
+        return res.status(400).json({
+          error: 'Forneça pelo menos um título, descrição, sintomas ou arquivo para análise'
+        });
+      }
+
+      // Só valida paciente se houver ID
+      if (parsedPatientId !== null) {
+        const patient = await Patient.findOne({ where: { id: parsedPatientId, doctorId } });
+        if (!patient) return res.status(404).json({ error: 'Paciente não encontrado' });
+      }
+
+      // Cria análise (patientId pode ser null)
+      const analysis = await Analysis.create({
+        title: title || 'Análise Médica',
+        description: description || null,
+        symptoms: symptoms || null,
+        status: 'pending',
+        patientId: parsedPatientId,
+        doctorId
+      });
+
+      console.log('✅ Análise criada:', analysis.id, 'paciente:', analysis.patientId ?? 'null');
+
+      // Salva imagens
+      if (req.files?.images) {
+        for (const imageFile of req.files.images) {
+          await MedicalImage.create({
+            filename: imageFile.filename,
+            originalName: imageFile.originalname,
+            filePath: imageFile.path,
+            fileSize: imageFile.size,
+            mimeType: imageFile.mimetype,
+            imageType: getImageType(imageFile.mimetype),
+            analysisId: analysis.id
+          });
+          console.log('📸 Imagem salva:', imageFile.originalname);
+        }
+      }
+
+      // Salva documentos
+      if (req.files?.documents) {
+        for (const docFile of req.files.documents) {
+          await MedicalImage.create({
+            filename: docFile.filename,
+            originalName: docFile.originalname,
+            filePath: docFile.path,
+            fileSize: docFile.size,
+            mimeType: docFile.mimetype,
+            imageType: 'other',
+            analysisId: analysis.id
+          });
+          console.log('📄 Documento salvo:', docFile.originalname);
+        }
+      }
+
+      // Atualiza contador do plano
+      if (subscription) {
+        await subscription.increment('analysisUsed');
+        console.log(`📊 Análises usadas: ${subscription.analysisUsed + 1}/${subscription.analysisLimit}`);
+      }
+
+      // Dispara processamento de IA (assíncrono)
+      console.log('🤖 Iniciando processamento com IA...');
+      processWithAI(analysis.id).catch(err => console.error('❌ Erro no processamento de IA:', err));
+
+      // Resposta
+      res.status(201).json({
+        message: 'Análise criada com sucesso',
+        analysis: {
+          id: analysis.id,
+          title: analysis.title,
+          description: analysis.description,
+          symptoms: analysis.symptoms,
+          status: analysis.status,
+          createdAt: analysis.createdAt,
+          patientId: analysis.patientId, // pode ser null
+          doctorId: analysis.doctorId
+        }
+      });
+    } catch (error) {
+      console.error('❌ Erro ao criar análise:', error);
+      res.status(500).json({
+        error: 'Erro interno do servidor',
+        details: process.env.NODE_ENV === 'development' ? error.message : undefined
+      });
+    }
+  }
+);
+
+// GET /api/analysis/:id - Buscar análise específica
+router.get('/:id', authenticate, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const analysis = await Analysis.findOne({
+      where: { id, doctorId: req.user.userId },
+      include: [
+        {
+          model: Patient,
+          attributes: ['id', 'name', 'email', 'birthDate', 'gender', 'medicalHistory', 'allergies'],
+          required: false
+        },
+        { model: AnalysisResult, required: false },
+        {
+          model: MedicalImage,
+          attributes: ['id', 'filename', 'originalName', 'imageType', 'mimeType', 'createdAt'],
+          required: false
+        }
+      ],
+      order: [[AnalysisResult, 'createdAt', 'ASC']]
+    });
+
+    if (!analysis) return res.status(404).json({ error: 'Análise não encontrada' });
+    res.json(analysis);
+  } catch (error) {
+    console.error('Error fetching analysis:', error);
+    res.status(500).json({ error: 'Erro ao buscar análise' });
+  }
+});
+
+// GET /api/analysis/:id/results - Buscar resultados de uma análise específica
+router.get('/:id/results', authenticate, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const analysis = await Analysis.findOne({
+      where: { id, doctorId: req.user.userId },
+      include: [
+        {
+          model: Patient,
+          attributes: ['id', 'name', 'email', 'birthDate', 'gender', 'medicalHistory', 'allergies'],
+          required: false
+        },
+        { model: AnalysisResult, required: false },
+        {
+          model: MedicalImage,
+          attributes: ['id', 'filename', 'originalName', 'imageType', 'mimeType', 'createdAt'],
+          required: false
+        }
+      ],
+      order: [[AnalysisResult, 'createdAt', 'ASC']]
+    });
+
+    if (!analysis) return res.status(404).json({ error: 'Análise não encontrada' });
+    res.json(analysis);
+  } catch (error) {
+    console.error('Error fetching analysis results:', error);
+    res.status(500).json({ error: 'Erro ao buscar resultados da análise' });
+  }
+});
+
+// PUT /api/analysis/:id/status - Atualizar status da análise
+router.put('/:id/status', authenticate, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { status } = req.body;
+
+    const valid = ['pending', 'processing', 'completed', 'failed'];
+    if (!valid.includes(status)) return res.status(400).json({ error: 'Status inválido' });
+
+    const analysis = await Analysis.findOne({ where: { id, doctorId: req.user.userId } });
+    if (!analysis) return res.status(404).json({ error: 'Análise não encontrada' });
+
+    await analysis.update({ status });
+
+    res.json({
+      message: 'Status atualizado com sucesso',
+      analysis: { id: analysis.id, status: analysis.status, updatedAt: analysis.updatedAt }
+    });
+  } catch (error) {
+    console.error('Error updating analysis status:', error);
+    res.status(500).json({ error: 'Erro ao atualizar status da análise' });
+  }
+});
+
+// DELETE /api/analysis/:id - Deletar análise
+router.delete('/:id', authenticate, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const analysis = await Analysis.findOne({ where: { id, doctorId: req.user.userId } });
+    if (!analysis) return res.status(404).json({ error: 'Análise não encontrada' });
+
+    await analysis.destroy(); // cascade cuida de results/imagens
+    res.json({ message: 'Análise deletada com sucesso' });
+  } catch (error) {
+    console.error('Error deleting analysis:', error);
+    res.status(500).json({ error: 'Erro ao deletar análise' });
+  }
+});
+
+// Reprocessar com IA
+router.post('/:id/reprocess', authenticate, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const analysis = await Analysis.findOne({ where: { id, doctorId: req.user.userId } });
+    if (!analysis) return res.status(404).json({ error: 'Análise não encontrada' });
+
+    await AnalysisResult.destroy({ where: { analysisId: id } });
+    await analysis.update({ status: 'pending', aiConfidenceScore: null });
+
+    console.log('🔄 Reprocessando análise com IA:', id);
+    processWithAI(analysis.id).catch(err => console.error('❌ Erro no reprocessamento:', err));
+
+    res.json({ message: 'Análise enviada para reprocessamento', analysis: { id: analysis.id, status: analysis.status } });
+  } catch (error) {
+    console.error('Error reprocessing analysis:', error);
+    res.status(500).json({ error: 'Erro ao reprocessar análise' });
+  }
+});
+
+// GET /api/analysis/:id/status - Status leve p/ polling
+router.get('/:id/status', authenticate, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const analysis = await Analysis.findOne({
+      where: { id, doctorId: req.user.userId },
+      include: [{ model: AnalysisResult, attributes: ['id'], required: false }]
+    });
+    if (!analysis) return res.status(404).json({ error: 'Análise não encontrada' });
+
+    res.json({
+      id: analysis.id,
+      status: analysis.status,                    // 'pending' | 'processing' | 'completed' | 'failed'
+      aiConfidenceScore: analysis.aiConfidenceScore,
+      resultsCount: analysis.AnalysisResults?.length || 0
+    });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: 'Erro ao buscar status' });
+  }
+});
+
+
+// Aux: tipo de imagem
+function getImageType(mimeType) {
+  const typeMap = {
+    'image/jpeg': 'photo',
+    'image/jpg': 'photo',
+    'image/png': 'photo',
+    'image/gif': 'photo',
+    'image/bmp': 'photo',
+    'image/webp': 'photo',
+    'application/pdf': 'other'
+  };
+  return typeMap[mimeType] || 'other';
+}
+
+module.exports = router;
+
+  const typeMap = {
+    'image/jpeg': 'photo',
+    'image/jpg': 'photo',
+    'image/png': 'photo',
+    'image/gif': 'photo',
+    'image/bmp': 'photo',
+    'image/webp': 'photo',
+    'application/pdf': 'other'
+  };
+  
+  return typeMap[mimeType] || 'other';
+}
+
+module.exports = router;
