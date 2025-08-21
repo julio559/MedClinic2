@@ -17,49 +17,63 @@ const PatientConditionsScreen = ({ navigation, route }) => {
 
   const loadPatientConditions = async () => {
     try {
-      // Buscar condições/doenças do paciente do banco
-      const response = await axios.get(`/patients/${patient.id}/conditions`);
-      setConditions(response.data);
-    } catch (error) {
-      console.error('Error loading conditions:', error);
-      // Dados reais baseados no paciente
-      setConditions([
-        {
-          id: '1',
-          name: 'Diabetes',
-          description: 'Diabetes tipo 2',
-          status: 'active',
-          patientId: patient.id
-        },
-        {
-          id: '2', 
-          name: 'Coriza',
-          description: 'Rinite alérgica',
-          status: 'active',
-          patientId: patient.id
-        },
-        {
-          id: '3',
-          name: 'GRIPE',
-          description: 'Gripe sazonal',
-          status: 'recovering',
-          patientId: patient.id
-        },
-        {
-          id: '4',
-          name: 'Loucura',
-          description: 'Transtorno de ansiedade',
-          status: 'monitoring',
-          patientId: patient.id
-        },
-        {
-          id: '5',
-          name: 'Burn out',
-          description: 'Síndrome de burnout',
-          status: 'treatment',
-          patientId: patient.id
+      // Buscar análises do paciente da API
+      const response = await axios.get(`/patients/${patient.id}`);
+      
+      // Extrair condições/diagnósticos das análises
+      const patientData = response.data;
+      const patientConditions = [];
+      
+      if (patientData.Analyses && patientData.Analyses.length > 0) {
+        // Para cada análise, buscar os resultados completos
+        for (const analysis of patientData.Analyses) {
+          try {
+            const analysisResponse = await axios.get(`/analysis/${analysis.id}/results`);
+            const fullAnalysis = analysisResponse.data;
+            
+            if (fullAnalysis.AnalysisResults && fullAnalysis.AnalysisResults.length > 0) {
+              fullAnalysis.AnalysisResults.forEach(result => {
+                if (result.category === 'Diagnóstico principal' || result.category === 'Diagnostico principal') {
+                  patientConditions.push({
+                    id: fullAnalysis.id,
+                    name: result.result.split(' ')[0] || 'Diagnóstico',
+                    description: result.result,
+                    status: fullAnalysis.status,
+                    analysisId: fullAnalysis.id,
+                    createdAt: fullAnalysis.createdAt
+                  });
+                }
+              });
+            } else {
+              // Se não tem resultados ainda, adiciona a análise como pendente
+              patientConditions.push({
+                id: analysis.id,
+                name: analysis.title || 'Análise em Processamento',
+                description: analysis.description || 'Análise ainda sendo processada',
+                status: analysis.status,
+                analysisId: analysis.id,
+                createdAt: analysis.createdAt
+              });
+            }
+          } catch (analysisError) {
+            console.error('Error loading analysis details:', analysisError);
+            // Adiciona análise mesmo com erro
+            patientConditions.push({
+              id: analysis.id,
+              name: analysis.title || 'Análise',
+              description: analysis.description || 'Clique para ver detalhes',
+              status: analysis.status,
+              analysisId: analysis.id,
+              createdAt: analysis.createdAt
+            });
+          }
         }
-      ]);
+      }
+      
+      setConditions(patientConditions);
+    } catch (error) {
+      console.error('Error loading patient conditions:', error);
+      setConditions([]);
     }
   };
 
@@ -70,26 +84,27 @@ const PatientConditionsScreen = ({ navigation, route }) => {
   };
 
   const filteredConditions = conditions.filter(condition =>
-    condition.name.toLowerCase().includes(searchQuery.toLowerCase())
+    condition.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
+    condition.description.toLowerCase().includes(searchQuery.toLowerCase())
   );
 
-  const navigateToConditionDetail = (condition) => {
-    navigation.navigate('ConditionDetail', { 
+  // CORREÇÃO: Navegar para PatientDetailScreen passando a análise específica
+  const navigateToPatientDetail = (condition) => {
+    navigation.navigate('PatientDetail', { 
       patient, 
-      condition,
-      patientId: patient.id,
-      conditionId: condition.id
+      analysisId: condition.analysisId
     });
   };
 
   const navigateToNewAnalysis = () => {
+    console.log('Navigating with patient:', patient);
     navigation.navigate('Analysis', { selectedPatient: patient });
   };
 
   const ConditionCard = ({ condition }) => (
     <TouchableOpacity 
       style={styles.conditionCard}
-      onPress={() => navigateToConditionDetail(condition)}
+      onPress={() => navigateToPatientDetail(condition)}
     >
       <View style={styles.conditionInfo}>
         <View style={styles.iconContainer}>
@@ -105,11 +120,16 @@ const PatientConditionsScreen = ({ navigation, route }) => {
     <View style={styles.container}>
       {/* Header */}
       <View style={styles.header}>
+        <View style={styles.headerTop}>
+          <TouchableOpacity onPress={() => navigation.goBack()}>
+            <Icon name="arrow-back" size={24} color="#1F2937" />
+          </TouchableOpacity>
+        </View>
         <View style={styles.patientInfo}>
           <View style={styles.avatarContainer}>
             <Icon name="person" size={24} color="#8B5A2B" />
           </View>
-          <Text style={styles.patientName}>Nome do paciente</Text>
+          <Text style={styles.patientName}>{patient.name}</Text>
         </View>
       </View>
 
@@ -126,14 +146,24 @@ const PatientConditionsScreen = ({ navigation, route }) => {
       </View>
 
       {/* Conditions List */}
-      <FlatList
-        data={filteredConditions}
-        keyExtractor={(item) => item.id}
-        renderItem={({ item }) => <ConditionCard condition={item} />}
-        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
-        contentContainerStyle={styles.listContainer}
-        showsVerticalScrollIndicator={false}
-      />
+      {filteredConditions.length > 0 ? (
+        <FlatList
+          data={filteredConditions}
+          keyExtractor={(item) => item.id}
+          renderItem={({ item }) => <ConditionCard condition={item} />}
+          refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
+          contentContainerStyle={styles.listContainer}
+          showsVerticalScrollIndicator={false}
+        />
+      ) : (
+        <View style={styles.emptyContainer}>
+          <Icon name="description" size={64} color="#D1D5DB" />
+          <Text style={styles.emptyTitle}>Nenhuma análise encontrada</Text>
+          <Text style={styles.emptySubtitle}>
+            {searchQuery ? 'Tente uma pesquisa diferente' : 'Este paciente ainda não possui análises realizadas. Clique em "Nova Análise" para começar.'}
+          </Text>
+        </View>
+      )}
 
       {/* New Analysis Button */}
       <View style={styles.newAnalysisContainer}>
@@ -142,46 +172,6 @@ const PatientConditionsScreen = ({ navigation, route }) => {
           onPress={navigateToNewAnalysis}
         >
           <Text style={styles.newAnalysisText}>Nova Análise</Text>
-        </TouchableOpacity>
-      </View>
-
-      {/* Bottom Navigation */}
-      <View style={styles.bottomNavigation}>
-        <TouchableOpacity 
-          style={styles.navItem}
-          onPress={() => navigation.navigate('Home')}
-        >
-          <Icon name="description" size={24} color="#9CA3AF" />
-          <Text style={styles.navText}>Análises</Text>
-        </TouchableOpacity>
-
-        <TouchableOpacity 
-          style={styles.navItem}
-          onPress={() => navigation.navigate('History')}
-        >
-          <Icon name="link" size={24} color="#9CA3AF" />
-          <Text style={styles.navText}>Histórico</Text>
-        </TouchableOpacity>
-
-        <TouchableOpacity 
-          style={[styles.navItem, styles.activeNavItem]}
-          onPress={() => navigation.navigate('Patients')}
-        >
-          <Icon name="people" size={24} color="#1E3A8A" />
-          <Text style={[styles.navText, styles.activeNavText]}>Pacientes</Text>
-        </TouchableOpacity>
-
-        <TouchableOpacity style={styles.navItem}>
-          <Icon name="bar-chart" size={24} color="#9CA3AF" />
-          <Text style={styles.navText}>Estatísticas</Text>
-        </TouchableOpacity>
-
-        <TouchableOpacity 
-          style={styles.navItem}
-          onPress={() => navigation.navigate('Profile')}
-        >
-          <Icon name="person" size={24} color="#9CA3AF" />
-          <Text style={styles.navText}>Perfil</Text>
         </TouchableOpacity>
       </View>
     </View>
@@ -200,6 +190,9 @@ const styles = StyleSheet.create({
     backgroundColor: '#FFFFFF',
     borderBottomWidth: 1,
     borderBottomColor: '#E5E7EB',
+  },
+  headerTop: {
+    marginBottom: 16,
   },
   patientInfo: {
     flexDirection: 'row',
@@ -237,6 +230,25 @@ const styles = StyleSheet.create({
     paddingHorizontal: 20,
     paddingBottom: 160,
   },
+  emptyContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingHorizontal: 40,
+  },
+  emptyTitle: {
+    fontSize: 18,
+    fontWeight: 'bold',
+    color: '#6B7280',
+    marginTop: 16,
+    marginBottom: 8,
+  },
+  emptySubtitle: {
+    fontSize: 14,
+    color: '#9CA3AF',
+    textAlign: 'center',
+    lineHeight: 20,
+  },
   conditionCard: {
     backgroundColor: '#FFFFFF',
     borderRadius: 0,
@@ -267,7 +279,7 @@ const styles = StyleSheet.create({
   },
   newAnalysisContainer: {
     position: 'absolute',
-    bottom: 100,
+    bottom: 30,
     left: 20,
     right: 20,
   },
@@ -288,36 +300,6 @@ const styles = StyleSheet.create({
   newAnalysisText: {
     color: '#FFFFFF',
     fontSize: 16,
-    fontWeight: '600',
-  },
-  bottomNavigation: {
-    flexDirection: 'row',
-    backgroundColor: '#FFFFFF',
-    paddingVertical: 12,
-    paddingHorizontal: 8,
-    borderTopWidth: 1,
-    borderTopColor: '#E5E7EB',
-    position: 'absolute',
-    bottom: 0,
-    left: 0,
-    right: 0,
-  },
-  navItem: {
-    flex: 1,
-    alignItems: 'center',
-    paddingVertical: 8,
-  },
-  activeNavItem: {
-    backgroundColor: 'rgba(30, 58, 138, 0.1)',
-    borderRadius: 8,
-  },
-  navText: {
-    fontSize: 12,
-    color: '#9CA3AF',
-    marginTop: 4,
-  },
-  activeNavText: {
-    color: '#1E3A8A',
     fontWeight: '600',
   },
 });

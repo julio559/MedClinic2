@@ -10,6 +10,7 @@ import HomeScreen from './src/screens/HomeScreen';
 import HistoryScreen from './src/screens/HistoryScreen';
 import PatientsScreen from './src/screens/PatientsScreen';
 import PatientDetailScreen from './src/screens/PatientDetailScreen';
+import PatientConditionsScreen from './src/screens/PatientConditionsScreen'; // ADICIONADO
 import NewAnalysisScreen from './src/screens/NewAnalysisScreen';
 import AnalysisResultScreen from './src/screens/AnalysisResultScreen';
 import ProfileScreen from './src/screens/ProfileScreen';
@@ -59,6 +60,8 @@ const AppNavigator = () => {
         {user ? (
           <>
             <Stack.Screen name="Main" component={TabNavigator} />
+            {/* CORREÇÃO: Sequência correta das telas de pacientes */}
+            <Stack.Screen name="PatientConditions" component={PatientConditionsScreen} />
             <Stack.Screen name="PatientDetail" component={PatientDetailScreen} />
             <Stack.Screen name="AnalysisResult" component={AnalysisResultScreen} />
           </>

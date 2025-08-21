@@ -6,9 +6,9 @@ import Icon from 'react-native-vector-icons/MaterialIcons';
 import * as ImagePicker from 'expo-image-picker';
 import * as DocumentPicker from 'expo-document-picker';
 import axios from 'axios';
+import AIAnalysisProgress from '../components/AIAnalysisProgress'; // Componente que criamos
 
 const NewAnalysisScreen = ({ navigation, route }) => {
-  const [patients, setPatients] = useState([]);
   const [selectedPatient, setSelectedPatient] = useState(route.params?.selectedPatient || null);
   const [images, setImages] = useState([]);
   const [documents, setDocuments] = useState([]);
@@ -16,12 +16,15 @@ const NewAnalysisScreen = ({ navigation, route }) => {
   const [previousHistoryText, setPreviousHistoryText] = useState('');
   const [physicalExamText, setPhysicalExamText] = useState('');
   const [loading, setLoading] = useState(false);
+  
+  // Estados para a análise de IA
+  const [aiAnalysisVisible, setAiAnalysisVisible] = useState(false);
+  const [currentAnalysisId, setCurrentAnalysisId] = useState(null);
 
   useEffect(() => {
-    loadPatients();
-    requestPermissions();
+    console.log('Route params:', route.params);
+    console.log('Selected patient:', selectedPatient);
     
-    // Se veio de um paciente específico, já seleciona
     if (route.params?.selectedPatient) {
       setSelectedPatient(route.params.selectedPatient);
     }
@@ -36,31 +39,9 @@ const NewAnalysisScreen = ({ navigation, route }) => {
     }
   };
 
-  const loadPatients = async () => {
-    try {
-      const response = await axios.get('/patients');
-      setPatients(response.data);
-    } catch (error) {
-      // Mock data if API fails
-      setPatients([
-        {
-          id: '1',
-          name: 'Asthma Treatment',
-          subtitle: 'Olivia Davis'
-        },
-        {
-          id: '2', 
-          name: 'Diabetes Treatment',
-          subtitle: 'João Silva'
-        },
-        {
-          id: '3',
-          name: 'Hypertension',
-          subtitle: 'Maria Santos'
-        }
-      ]);
-    }
-  };
+  useEffect(() => {
+    requestPermissions();
+  }, []);
 
   const pickImages = async () => {
     try {
@@ -109,13 +90,13 @@ const NewAnalysisScreen = ({ navigation, route }) => {
     }
   };
 
-  const submitAnalysis = async () => {
-    if (!selectedPatient) {
-      Alert.alert('Erro', 'Selecione um paciente primeiro');
-      return;
-    }
+  const removeImage = (indexToRemove) => {
+    setImages(prev => prev.filter((_, index) => index !== indexToRemove));
+  };
 
-    if (!historyText && images.length === 0 && documents.length === 0) {
+  const submitAnalysis = async () => {
+    // Validação básica - pelo menos um campo deve estar preenchido
+    if (!historyText && !previousHistoryText && !physicalExamText && images.length === 0 && documents.length === 0) {
       Alert.alert('Erro', 'Preencha pelo menos um campo ou adicione imagens/documentos');
       return;
     }
@@ -123,9 +104,26 @@ const NewAnalysisScreen = ({ navigation, route }) => {
     setLoading(true);
     try {
       const formData = new FormData();
-      formData.append('patientId', selectedPatient.id);
-      formData.append('title', `Análise para ${selectedPatient.name}`);
-      formData.append('description', historyText);
+      
+      // Adiciona patientId se houver paciente selecionado com nome
+      if (selectedPatient && selectedPatient.name && selectedPatient.id) {
+        console.log('Submitting with patient:', selectedPatient);
+        formData.append('patientId', selectedPatient.id);
+        formData.append('title', `Análise para ${selectedPatient.name}`);
+      } else {
+        console.log('Submitting without patient');
+        formData.append('title', 'Análise Geral');
+      }
+      
+      // Construir descrição completa
+      let fullDescription = historyText || '';
+      if (previousHistoryText) {
+        fullDescription = fullDescription ? 
+          `${fullDescription}\n\nHistórico Prévio: ${previousHistoryText}` : 
+          `Histórico Prévio: ${previousHistoryText}`;
+      }
+      
+      formData.append('description', fullDescription);
       formData.append('symptoms', physicalExamText);
 
       // Add images
@@ -137,9 +135,9 @@ const NewAnalysisScreen = ({ navigation, route }) => {
         });
       });
 
-      // Add documents
+      // Add documents (como imagens também)
       documents.forEach((doc, index) => {
-        formData.append('documents', {
+        formData.append('images', {
           uri: doc.uri,
           type: doc.mimeType || 'application/pdf',
           name: doc.name || `document_${index}.pdf`,
@@ -150,21 +148,69 @@ const NewAnalysisScreen = ({ navigation, route }) => {
         headers: { 'Content-Type': 'multipart/form-data' },
       });
 
-      Alert.alert('Sucesso', 'Análise enviada com sucesso!', [
-        { 
-          text: 'Ver Resultados', 
-          onPress: () => navigation.navigate('AnalysisResult', { analysisId: response.data.analysis?.id })
-        },
-        { 
-          text: 'OK', 
-          onPress: () => navigation.goBack()
-        }
-      ]);
+      // Sucesso ao criar análise - iniciar processamento de IA
+      const analysisId = response.data.analysis?.id;
+      
+      if (analysisId) {
+        // Mostrar modal de progresso da IA
+        setCurrentAnalysisId(analysisId);
+        setAiAnalysisVisible(true);
+        
+        // Limpar formulário
+        setHistoryText('');
+        setPreviousHistoryText('');
+        setPhysicalExamText('');
+        setImages([]);
+        setDocuments([]);
+        
+        Alert.alert('✅ Análise Criada!', 'A análise foi enviada para processamento de IA. Acompanhe o progresso na tela.', [
+          { text: 'OK' }
+        ]);
+      } else {
+        Alert.alert('Erro', 'Não foi possível obter ID da análise');
+      }
+
     } catch (error) {
+      console.error('Submission error:', error);
       Alert.alert('Erro', error.response?.data?.error || 'Erro ao enviar análise');
     } finally {
       setLoading(false);
     }
+  };
+
+  // Callback quando a análise de IA é concluída
+  const handleAIAnalysisComplete = (data) => {
+    setAiAnalysisVisible(false);
+    setCurrentAnalysisId(null);
+    
+    Alert.alert(
+      '🎉 Análise Concluída!', 
+      `A IA processou sua análise com ${Math.round(data.confidence * 100)}% de confiança.`,
+      [
+        { 
+          text: 'Ver Resultados', 
+          onPress: () => navigation.navigate('AnalysisResult', { analysisId: data.analysisId })
+        },
+        { 
+          text: 'Continuar', 
+          onPress: () => navigation.goBack()
+        }
+      ]
+    );
+  };
+
+  // Callback quando há erro na análise de IA
+  const handleAIAnalysisError = (error) => {
+    setAiAnalysisVisible(false);
+    setCurrentAnalysisId(null);
+    
+    Alert.alert(
+      '❌ Erro na Análise', 
+      error.message || 'Ocorreu um erro durante o processamento da IA.',
+      [
+        { text: 'OK' }
+      ]
+    );
   };
 
   return (
@@ -179,8 +225,8 @@ const NewAnalysisScreen = ({ navigation, route }) => {
       </View>
 
       <ScrollView style={styles.content} showsVerticalScrollIndicator={false}>
-        {/* Selected Patient Display */}
-        {selectedPatient && (
+        {/* Selected Patient Display - Condição mais robusta */}
+        {selectedPatient && selectedPatient.name ? (
           <View style={styles.selectedPatientContainer}>
             <View style={styles.selectedPatientCard}>
               <View style={styles.patientAvatar}>
@@ -191,45 +237,41 @@ const NewAnalysisScreen = ({ navigation, route }) => {
                   Paciente: {selectedPatient.name}
                 </Text>
                 <Text style={styles.selectedPatientSubtitle}>
-                  {selectedPatient.subtitle}
+                  {selectedPatient.email || 'Email não informado'}
                 </Text>
               </View>
               <TouchableOpacity 
-                style={styles.changePatientButton}
+                style={styles.removePatientButton}
                 onPress={() => setSelectedPatient(null)}
               >
-                <Text style={styles.changePatientText}>Alterar</Text>
+                <Icon name="close" size={20} color="#EF4444" />
               </TouchableOpacity>
             </View>
           </View>
-        )}
-
-        {/* Patient Selection (if none selected) */}
-        {!selectedPatient && (
-          <View style={styles.patientSelectionContainer}>
-            <Text style={styles.sectionTitle}>Selecionar Paciente</Text>
-            <ScrollView horizontal showsHorizontalScrollIndicator={false}>
-              {patients.map((patient) => (
-                <TouchableOpacity
-                  key={patient.id}
-                  style={styles.patientCard}
-                  onPress={() => setSelectedPatient(patient)}
-                >
-                  <Icon name="person" size={24} color="#6B7280" />
-                  <Text style={styles.patientCardName}>{patient.name}</Text>
-                  <Text style={styles.patientCardSubtitle}>{patient.subtitle}</Text>
-                </TouchableOpacity>
-              ))}
-            </ScrollView>
+        ) : (
+          <View style={styles.noPatientContainer}>
+            <View style={styles.noPatientCard}>
+              <Icon name="person-outline" size={24} color="#6B7280" />
+              <Text style={styles.noPatientText}>
+                Análise geral (sem paciente vinculado)
+              </Text>
+            </View>
           </View>
         )}
 
         {/* Medical Images Section */}
         <View style={styles.imagesSection}>
+          <Text style={styles.sectionTitle}>Imagens Médicas</Text>
           <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.imagesScroll}>
             {images.map((image, index) => (
               <View key={index} style={styles.imageContainer}>
                 <Image source={{ uri: image.uri }} style={styles.medicalImage} />
+                <TouchableOpacity 
+                  style={styles.removeImageButton}
+                  onPress={() => removeImage(index)}
+                >
+                  <Icon name="close" size={16} color="#FFFFFF" />
+                </TouchableOpacity>
               </View>
             ))}
             {Array.from({ length: Math.max(0, 3 - images.length) }, (_, index) => (
@@ -239,6 +281,7 @@ const NewAnalysisScreen = ({ navigation, route }) => {
                 onPress={pickImages}
               >
                 <Icon name="add" size={32} color="#9CA3AF" />
+                <Text style={styles.addImageText}>Adicionar</Text>
               </TouchableOpacity>
             ))}
           </ScrollView>
@@ -246,6 +289,7 @@ const NewAnalysisScreen = ({ navigation, route }) => {
 
         {/* Capture Image Button */}
         <TouchableOpacity style={styles.captureButton} onPress={takePhoto}>
+          <Icon name="camera-alt" size={20} color="#FFFFFF" style={{ marginRight: 8 }} />
           <Text style={styles.captureButtonText}>Capturar Imagem</Text>
         </TouchableOpacity>
 
@@ -263,7 +307,7 @@ const NewAnalysisScreen = ({ navigation, route }) => {
             numberOfLines={6}
             value={historyText}
             onChangeText={setHistoryText}
-            placeholder="Descreva a história da doença..."
+            placeholder="Descreva a história da doença atual..."
             placeholderTextColor="#9CA3AF"
           />
         </View>
@@ -282,15 +326,15 @@ const NewAnalysisScreen = ({ navigation, route }) => {
             numberOfLines={6}
             value={previousHistoryText}
             onChangeText={setPreviousHistoryText}
-            placeholder="Descreva o histórico prévio..."
+            placeholder="Histórico médico anterior, cirurgias, medicações..."
             placeholderTextColor="#9CA3AF"
           />
         </View>
 
-        {/* Exame Físico da Doença */}
+        {/* Exame Físico */}
         <View style={styles.fieldContainer}>
           <View style={styles.fieldHeader}>
-            <Text style={styles.fieldTitle}>Exame Físico da Doença</Text>
+            <Text style={styles.fieldTitle}>Exame Físico</Text>
             <TouchableOpacity>
               <Icon name="help-outline" size={20} color="#9CA3AF" />
             </TouchableOpacity>
@@ -301,7 +345,7 @@ const NewAnalysisScreen = ({ navigation, route }) => {
             numberOfLines={6}
             value={physicalExamText}
             onChangeText={setPhysicalExamText}
-            placeholder="Descreva o exame físico..."
+            placeholder="Achados do exame físico, sinais clínicos..."
             placeholderTextColor="#9CA3AF"
           />
         </View>
@@ -328,19 +372,37 @@ const NewAnalysisScreen = ({ navigation, route }) => {
           ))}
         </View>
 
-        {/* Submit Button */}
+        {/* Submit Button com indicação de IA */}
         <TouchableOpacity 
           style={[styles.submitButton, loading && styles.disabledButton]} 
           onPress={submitAnalysis} 
-          disabled={loading || !selectedPatient}
+          disabled={loading}
         >
+          <Icon name="psychology" size={20} color="#FFFFFF" style={{ marginRight: 8 }} />
           <Text style={styles.submitButtonText}>
-            {loading ? 'Enviando...' : 'Enviar Análise para EYA'}
+            {loading ? 'Enviando...' : 'Analisar com IA Médica'}
           </Text>
         </TouchableOpacity>
 
+        {/* AI Info */}
+        <View style={styles.aiInfoContainer}>
+          <Icon name="auto-awesome" size={16} color="#3B82F6" />
+          <Text style={styles.aiInfoText}>
+            Nossa IA médica analisará todos os dados fornecidos e gerará relatórios detalhados sobre diagnóstico, etiologia, fisiopatologia e tratamento.
+          </Text>
+        </View>
+
         <View style={{ height: 100 }} />
       </ScrollView>
+
+      {/* Modal de Progresso da IA */}
+      <AIAnalysisProgress
+        visible={aiAnalysisVisible}
+        analysisId={currentAnalysisId}
+        doctorId={selectedPatient?.doctorId || 'general'} // Use o ID do médico ou 'general'
+        onComplete={handleAIAnalysisComplete}
+        onError={handleAIAnalysisError}
+      />
     </View>
   );
 };
@@ -402,48 +464,35 @@ const styles = StyleSheet.create({
     color: '#6366F1',
     marginTop: 2,
   },
-  changePatientButton: {
-    backgroundColor: '#FFFFFF',
+  removePatientButton: {
+    backgroundColor: '#FEE2E2',
     borderRadius: 6,
-    paddingHorizontal: 12,
-    paddingVertical: 6,
+    padding: 8,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
-  changePatientText: {
-    fontSize: 14,
-    color: '#1E3A8A',
-    fontWeight: '600',
-  },
-  patientSelectionContainer: {
+  noPatientContainer: {
     marginVertical: 20,
+  },
+  noPatientCard: {
+    backgroundColor: '#F3F4F6',
+    borderRadius: 12,
+    padding: 16,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  noPatientText: {
+    fontSize: 16,
+    color: '#6B7280',
+    marginLeft: 12,
+    fontStyle: 'italic',
   },
   sectionTitle: {
     fontSize: 16,
     fontWeight: '600',
     color: '#1F2937',
     marginBottom: 12,
-  },
-  patientCard: {
-    backgroundColor: '#F9FAFB',
-    borderRadius: 12,
-    padding: 16,
-    marginRight: 12,
-    minWidth: 120,
-    alignItems: 'center',
-    borderWidth: 1,
-    borderColor: '#E5E7EB',
-  },
-  patientCardName: {
-    fontSize: 12,
-    fontWeight: '600',
-    color: '#1F2937',
-    marginTop: 8,
-    textAlign: 'center',
-  },
-  patientCardSubtitle: {
-    fontSize: 10,
-    color: '#6B7280',
-    marginTop: 4,
-    textAlign: 'center',
   },
   imagesSection: {
     marginVertical: 20,
@@ -453,11 +502,23 @@ const styles = StyleSheet.create({
   },
   imageContainer: {
     marginRight: 12,
+    position: 'relative',
   },
   medicalImage: {
     width: 100,
     height: 100,
     borderRadius: 8,
+  },
+  removeImageButton: {
+    position: 'absolute',
+    top: 4,
+    right: 4,
+    backgroundColor: '#EF4444',
+    borderRadius: 12,
+    width: 24,
+    height: 24,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   addImagePlaceholder: {
     width: 100,
@@ -471,12 +532,19 @@ const styles = StyleSheet.create({
     backgroundColor: '#F9FAFB',
     marginRight: 12,
   },
+  addImageText: {
+    fontSize: 12,
+    color: '#9CA3AF',
+    marginTop: 4,
+  },
   captureButton: {
     backgroundColor: '#1E3A8A',
     borderRadius: 8,
     padding: 16,
     alignItems: 'center',
     marginBottom: 24,
+    flexDirection: 'row',
+    justifyContent: 'center',
   },
   captureButtonText: {
     color: '#FFFFFF',
@@ -547,15 +615,32 @@ const styles = StyleSheet.create({
     padding: 16,
     alignItems: 'center',
     marginTop: 20,
+    flexDirection: 'row',
+    justifyContent: 'center',
   },
   submitButtonText: {
     color: '#FFFFFF',
     fontSize: 16,
-    fontWeight:'600',
- },
- disabledButton: {
-   backgroundColor: '#9CA3AF',
- },
+    fontWeight: '600',
+  },
+  disabledButton: {
+    backgroundColor: '#9CA3AF',
+  },
+  aiInfoContainer: {
+    backgroundColor: '#EBF4FF',
+    borderRadius: 12,
+    padding: 16,
+    marginTop: 16,
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+  },
+  aiInfoText: {
+    fontSize: 14,
+    color: '#1E40AF',
+    lineHeight: 20,
+    flex: 1,
+    marginLeft: 8,
+  },
 });
 
 export default NewAnalysisScreen;

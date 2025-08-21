@@ -25,26 +25,35 @@ const userRoutes = require('./routes/users');
 const patientRoutes = require('./routes/patients');
 const analysisRoutes = require('./routes/analysis');
 const subscriptionRoutes = require('./routes/subscriptions');
+const plansRoutes = require('./routes/plans'); // NOVA ROTA
 
 app.use('/api/auth', authRoutes);
 app.use('/api/users', userRoutes);
 app.use('/api/patients', patientRoutes);
 app.use('/api/analysis', analysisRoutes);
 app.use('/api/subscriptions', subscriptionRoutes);
+app.use('/api/plans', plansRoutes); // NOVA ROTA
 
 app.get('/health', (req, res) => {
   res.json({ 
     status: 'OK', 
     message: 'Medical AI Backend funcionando!',
-    database: 'MySQL conectado'
+    database: 'MySQL conectado',
+    timestamp: new Date().toISOString()
   });
 });
 
 // Socket.IO
 io.on('connection', (socket) => {
   console.log('👨‍⚕️ Doctor connected:', socket.id);
+  
   socket.on('join_doctor_room', (doctorId) => {
     socket.join(`doctor_${doctorId}`);
+    console.log(`Doctor ${doctorId} joined room`);
+  });
+  
+  socket.on('disconnect', () => {
+    console.log('👨‍⚕️ Doctor disconnected:', socket.id);
   });
 });
 
@@ -55,6 +64,7 @@ db.sequelize.sync({ force: false }).then(() => {
     console.log(`🚀 Server rodando na porta ${PORT}`);
     console.log(`🗄️ MySQL conectado: ${process.env.DB_NAME}`);
     console.log(`📊 Health check: http://localhost:${PORT}/health`);
+    console.log(`💳 Plans API: http://localhost:${PORT}/api/plans`);
   });
 }).catch(error => {
   console.error('❌ Erro MySQL:', error.message);

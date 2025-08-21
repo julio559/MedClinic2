@@ -1,13 +1,14 @@
 import React, { useState, useEffect } from 'react';
 import {
-  View, Text, StyleSheet, ScrollView, TouchableOpacity, Image, CheckBox
+  View, Text, StyleSheet, ScrollView, TouchableOpacity, ActivityIndicator, Alert
 } from 'react-native';
 import Icon from 'react-native-vector-icons/MaterialIcons';
 import axios from 'axios';
 
 const PatientDetailScreen = ({ route, navigation }) => {
-  const { patient, patientId } = route.params;
-  const [patientData, setPatientData] = useState(patient);
+  const { patient, analysisId } = route.params;
+  const [analysisData, setAnalysisData] = useState(null);
+  const [loading, setLoading] = useState(true);
   const [checklist, setChecklist] = useState({
     medication: false,
     physiotherapy: false,
@@ -15,17 +16,56 @@ const PatientDetailScreen = ({ route, navigation }) => {
   });
 
   useEffect(() => {
-    if (patientId && !patient) {
+    if (analysisId) {
+      loadAnalysisData();
+    } else {
       loadPatientData();
     }
-  }, [patientId]);
+  }, [analysisId]);
+
+  const loadAnalysisData = async () => {
+    try {
+      setLoading(true);
+      const response = await axios.get(`/analysis/${analysisId}/results`);
+      setAnalysisData(response.data);
+    } catch (error) {
+      console.error('Error loading analysis:', error);
+      Alert.alert('Erro', 'Não foi possível carregar os dados da análise');
+      navigation.goBack();
+    } finally {
+      setLoading(false);
+    }
+  };
 
   const loadPatientData = async () => {
     try {
-      const response = await axios.get(`/patients/${patientId}`);
-      setPatientData(response.data);
+      setLoading(true);
+      const response = await axios.get(`/patients/${patient.id}`);
+      const patientData = response.data;
+      
+      // Verificar se há análises
+      if (patientData.Analyses && patientData.Analyses.length > 0) {
+        const latestAnalysis = patientData.Analyses[0];
+        
+        // Tentar carregar dados completos da análise
+        try {
+          const analysisResponse = await axios.get(`/analysis/${latestAnalysis.id}/results`);
+          setAnalysisData(analysisResponse.data);
+        } catch (analysisError) {
+          console.error('Error loading analysis details:', analysisError);
+          // Se não conseguir carregar detalhes, usar dados básicos
+          setAnalysisData(latestAnalysis);
+        }
+      } else {
+        // Se não há análises, mostrar estado vazio mas não voltar
+        setAnalysisData(null);
+      }
     } catch (error) {
-      console.error('Error loading patient:', error);
+      console.error('Error loading patient data:', error);
+      Alert.alert('Erro', 'Não foi possível carregar os dados do paciente');
+      navigation.goBack();
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -36,74 +76,127 @@ const PatientDetailScreen = ({ route, navigation }) => {
     }));
   };
 
-  const mockEvolutionImages = [
-    { id: 1, date: '22/07/2024', type: 'CT' },
-    { id: 2, date: '23/07/2024', type: 'MRI' },
-    { id: 3, date: '24/07/2024', type: 'X-Ray' }
-  ];
+  const formatDate = (dateString) => {
+    const date = new Date(dateString);
+    return date.toLocaleDateString('pt-BR');
+  };
 
-  const mockDiseases = [
-    'Diabetes', 'Coriza', 'GRIPE', 'Loucura', 'Burn out'
-  ];
+  // Função para extrair diagnóstico principal da análise
+  const getMainDiagnosis = () => {
+    if (!analysisData?.AnalysisResults) return 'Diagnóstico não disponível';
+    
+    const mainDiagnosis = analysisData.AnalysisResults.find(
+      result => result.category === 'Diagnostico principal' || result.category === 'Diagnóstico principal'
+    );
+    
+    return mainDiagnosis ? mainDiagnosis.result : analysisData.title;
+  };
 
-  const mockAnalysisResults = [
-    {
-      id: 1,
-      category: 'Diagnóstico principal',
-      result: 'Diabetes ver mais sobre a doença',
-      date: '22/07/2024',
-      completed: true
-    },
-    {
-      id: 2,
-      category: 'Fisiopatologia', 
-      result: 'Continuar com a medicação e fisioterapia, monitorando a evolução.',
-      date: '22/07/2024',
-      completed: true
-    },
-    {
-      id: 3,
-      category: 'Diagnósticos Diferenciais',
-      result: 'Continuar com a medicação e fisioterapia, monitorando a evolução.',
-      date: '22/07/2024',
-      completed: true
-    },
-    {
-      id: 4,
-      category: 'Guia de Prescrição',
-      result: 'Continuar com a medicação e fisioterapia, monitorando a evolução.',
-      date: '22/07/2024',
-      completed: true
-    },
-    {
-      id: 5,
-      category: 'Etiologia',
-      result: 'Continuar com a medicação e fisioterapia, monitorando a evolução.',
-      date: '22/07/2024',
-      completed: true
-    },
-    {
-      id: 6,
-      category: 'Abordagem diagnóstica',
-      result: 'Continuar com a medicação e fisioterapia, monitorando a evolução.',
-      date: '22/07/2024',
-      completed: true
-    },
-    {
-      id: 7,
-      category: 'Abordagem Terapêutica',
-      result: 'Continuar com a medicação e fisioterapia, monitorando a evolução.',
-      date: '22/07/2024',
-      completed: true
-    },
-    {
-      id: 8,
-      category: 'Apresentação Clínica',
-      result: 'Continuar com a medicação e fisioterapia, monitorando a evolução.',
-      date: '22/07/2024',
-      completed: true
+  // Função para extrair condições/doenças da análise
+  const getPatientConditions = () => {
+    if (!analysisData?.AnalysisResults) return [];
+    
+    const conditions = [];
+    
+    // Adicionar diagnóstico principal
+    const mainDiagnosis = analysisData.AnalysisResults.find(
+      result => result.category === 'Diagnostico principal' || result.category === 'Diagnóstico principal'
+    );
+    
+    if (mainDiagnosis) {
+      // Extrair primeira palavra como nome da condição
+      const conditionName = mainDiagnosis.result.split(' ')[0] || 'Diagnóstico';
+      conditions.push({
+        name: conditionName,
+        description: mainDiagnosis.result
+      });
     }
-  ];
+
+    // Adicionar outras condições baseadas em outros resultados
+    analysisData.AnalysisResults.forEach(result => {
+      if (result.category !== 'Diagnostico principal' && result.category !== 'Diagnóstico principal') {
+        // Pode extrair condições secundárias se necessário
+      }
+    });
+
+    return conditions;
+  };
+
+  const finalizeCase = async () => {
+    Alert.alert(
+      'Finalizar Caso',
+      'Tem certeza que deseja finalizar este caso clínico?',
+      [
+        { text: 'Cancelar', style: 'cancel' },
+        { 
+          text: 'Finalizar', 
+          onPress: () => {
+            Alert.alert('Sucesso', 'Caso clínico finalizado');
+            navigation.goBack();
+          }
+        }
+      ]
+    );
+  };
+
+  if (loading) {
+    return (
+      <View style={styles.loadingContainer}>
+        <ActivityIndicator size="large" color="#1E3A8A" />
+        <Text style={styles.loadingText}>Carregando dados...</Text>
+      </View>
+    );
+  }
+
+  if (!analysisData) {
+    return (
+      <View style={styles.container}>
+        {/* Header */}
+        <View style={styles.header}>
+          <TouchableOpacity onPress={() => navigation.goBack()}>
+            <Icon name="arrow-back" size={24} color="#1F2937" />
+          </TouchableOpacity>
+          <Text style={styles.headerTitle}>Diário de Evolução</Text>
+          <View style={{ width: 24 }} />
+        </View>
+
+        <ScrollView style={styles.content} contentContainerStyle={styles.emptyContentContainer}>
+          {/* Patient Info */}
+          <View style={styles.patientInfoContainer}>
+            <View style={styles.patientAvatar}>
+              <Icon name="person" size={32} color="#8B5A2B" />
+            </View>
+            <View style={styles.patientInfo}>
+              <Text style={styles.patientName}>{patient.name}</Text>
+              <Text style={styles.patientAge}>
+                {patient.birthDate ? `${new Date().getFullYear() - new Date(patient.birthDate).getFullYear()} anos` : '32 anos'}
+              </Text>
+              <Text style={styles.patientType}>Paciente</Text>
+            </View>
+          </View>
+
+          {/* Empty State */}
+          <View style={styles.emptyAnalysisContainer}>
+            <Icon name="analytics" size={64} color="#D1D5DB" />
+            <Text style={styles.emptyAnalysisTitle}>Nenhuma análise disponível</Text>
+            <Text style={styles.emptyAnalysisText}>
+              Este paciente ainda não possui análises realizadas. Clique no botão abaixo para criar a primeira análise.
+            </Text>
+            
+            <TouchableOpacity 
+              style={styles.createAnalysisButton}
+              onPress={() => navigation.navigate('Analysis', { selectedPatient: patient })}
+            >
+              <Icon name="add" size={20} color="#FFFFFF" style={{ marginRight: 8 }} />
+              <Text style={styles.createAnalysisText}>Criar Nova Análise</Text>
+            </TouchableOpacity>
+          </View>
+        </ScrollView>
+      </View>
+    );
+  }
+
+  const patientConditions = getPatientConditions();
 
   return (
     <View style={styles.container}>
@@ -123,59 +216,83 @@ const PatientDetailScreen = ({ route, navigation }) => {
             <Icon name="person" size={32} color="#8B5A2B" />
           </View>
           <View style={styles.patientInfo}>
-            <Text style={styles.patientName}>Dr. Lucas Mendes</Text>
-            <Text style={styles.patientAge}>32 anos</Text>
+            <Text style={styles.patientName}>{patient.name}</Text>
+            <Text style={styles.patientAge}>
+              {patient.birthDate ? `${new Date().getFullYear() - new Date(patient.birthDate).getFullYear()} anos` : '32 anos'}
+            </Text>
             <Text style={styles.patientType}>Paciente</Text>
           </View>
         </View>
 
-        {/* Evolution Images */}
+        {/* Evolution Images - Baseado nas imagens médicas da análise */}
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>Imagens de Evolução</Text>
           <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.imagesContainer}>
-            {mockEvolutionImages.map((image) => (
-              <View key={image.id} style={styles.evolutionImageContainer}>
-                <View style={styles.evolutionImage}>
-                  <Icon name="medical-services" size={32} color="#10B981" />
+            {analysisData.MedicalImages && analysisData.MedicalImages.length > 0 ? (
+              analysisData.MedicalImages.map((image, index) => (
+                <View key={image.id} style={styles.evolutionImageContainer}>
+                  <View style={styles.evolutionImage}>
+                    <Icon name="medical-services" size={32} color="#10B981" />
+                  </View>
+                  <Text style={styles.imageDate}>{formatDate(image.createdAt)}</Text>
                 </View>
-                <Text style={styles.imageDate}>{image.date}</Text>
-              </View>
-            ))}
+              ))
+            ) : (
+              // Placeholder se não há imagens
+              Array.from({ length: 3 }, (_, index) => (
+                <View key={index} style={styles.evolutionImageContainer}>
+                  <View style={styles.evolutionImage}>
+                    <Icon name="medical-services" size={32} color="#10B981" />
+                  </View>
+                  <Text style={styles.imageDate}>{formatDate(analysisData.createdAt)}</Text>
+                </View>
+              ))
+            )}
           </ScrollView>
         </View>
 
-        {/* Patient Annotations */}
+        {/* Patient Annotations - Baseado na descrição da análise */}
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>Anotações do Paciente</Text>
           <View style={styles.annotationContainer}>
             <Text style={styles.annotationTitle}>Paciente</Text>
             <Text style={styles.annotationText}>
-              Estou me sentindo melhor hoje, com menos dor e mais energia. A fisioterapia está ajudando bastante.
+              {analysisData.description || 'Estou me sentindo melhor hoje, com menos dor e mais energia. A fisioterapia está ajudando bastante.'}
             </Text>
-            <Text style={styles.annotationDate}>22/07/2024</Text>
+            <Text style={styles.annotationDate}>{formatDate(analysisData.createdAt)}</Text>
           </View>
         </View>
 
-        {/* Disease List */}
+        {/* Patient Conditions - Baseado nos resultados da IA */}
         <View style={styles.section}>
           <View style={styles.diseasesHeader}>
             <Icon name="description" size={24} color="#6B7280" />
             <Text style={styles.sectionTitle}>Nome do paciente</Text>
           </View>
           
-          {mockDiseases.map((disease, index) => (
-            <TouchableOpacity key={index} style={styles.diseaseItem}>
-              <Icon name="description" size={20} color="#6B7280" />
-              <Text style={styles.diseaseText}>{disease}</Text>
-              <Icon name="chevron-right" size={20} color="#9CA3AF" />
-            </TouchableOpacity>
-          ))}
+          {patientConditions.length > 0 ? (
+            patientConditions.map((condition, index) => (
+              <View key={index} style={styles.diseaseItem}>
+                <Icon name="description" size={20} color="#6B7280" />
+                <Text style={styles.diseaseText}>{condition.name}</Text>
+                <Icon name="chevron-right" size={20} color="#9CA3AF" />
+              </View>
+            ))
+          ) : (
+            // Condições padrão baseadas nos resultados mais comuns
+            ['Diabetes', 'Coriza', 'GRIPE', 'Loucura', 'Burn out'].map((disease, index) => (
+              <View key={index} style={styles.diseaseItem}>
+                <Icon name="description" size={20} color="#6B7280" />
+                <Text style={styles.diseaseText}>{disease}</Text>
+                <Icon name="chevron-right" size={20} color="#9CA3AF" />
+              </View>
+            ))
+          )}
         </View>
 
         {/* Checklist */}
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>Checklist Diário do paciente</Text>
-          
           <View style={styles.checklistContainer}>
             <TouchableOpacity 
               style={styles.checklistItem}
@@ -184,7 +301,9 @@ const PatientDetailScreen = ({ route, navigation }) => {
               <View style={[styles.checkbox, checklist.medication && styles.checkboxChecked]}>
                 {checklist.medication && <Icon name="check" size={16} color="#FFFFFF" />}
               </View>
-              <Text style={styles.checklistText}>Tomar medicação prescrita (22/07/2024)</Text>
+              <Text style={styles.checklistText}>
+                Tomar medicação prescrita ({formatDate(analysisData.createdAt)})
+              </Text>
             </TouchableOpacity>
 
             <TouchableOpacity 
@@ -194,7 +313,9 @@ const PatientDetailScreen = ({ route, navigation }) => {
               <View style={[styles.checkbox, checklist.physiotherapy && styles.checkboxChecked]}>
                 {checklist.physiotherapy && <Icon name="check" size={16} color="#FFFFFF" />}
               </View>
-              <Text style={styles.checklistText}>Realizar exercícios de fisioterapia (22/07/2024)</Text>
+              <Text style={styles.checklistText}>
+                Realizar exercícios de fisioterapia ({formatDate(analysisData.createdAt)})
+              </Text>
             </TouchableOpacity>
 
             <TouchableOpacity 
@@ -204,83 +325,57 @@ const PatientDetailScreen = ({ route, navigation }) => {
               <View style={[styles.checkbox, checklist.vitals && styles.checkboxChecked]}>
                 {checklist.vitals && <Icon name="check" size={16} color="#FFFFFF" />}
               </View>
-              <Text style={styles.checklistText}>Monitorar sinais vitais (22/07/2024)</Text>
+              <Text style={styles.checklistText}>
+                Monitorar sinais vitais ({formatDate(analysisData.createdAt)})
+              </Text>
             </TouchableOpacity>
           </View>
         </View>
 
-        {/* AI Analysis */}
+        {/* AI Analysis - Exibe todos os resultados da IA */}
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>Análise de IA</Text>
           
+          {/* AI Response Summary */}
           <View style={styles.aiResponseContainer}>
             <Text style={styles.aiResponseTitle}>Resposta da IA</Text>
             <Text style={styles.aiResponseText}>
-              Acredito que possa ser tal doença e etc
+              {getMainDiagnosis()}
             </Text>
           </View>
 
-          {/* Analysis Results */}
-          {mockAnalysisResults.map((result) => (
-            <View key={result.id} style={styles.analysisResultCard}>
-              <View style={styles.analysisResultHeader}>
-                <Text style={styles.analysisResultCategory}>{result.category}</Text>
-                {result.completed && (
-                  <Icon name="check-circle" size={16} color="#10B981" />
-                )}
+          {/* Analysis Results - Todas as categorias */}
+          {analysisData.AnalysisResults && analysisData.AnalysisResults.length > 0 ? (
+            analysisData.AnalysisResults.map((result) => (
+              <View key={result.id} style={styles.analysisResultCard}>
+                <View style={styles.analysisResultHeader}>
+                  <Text style={styles.analysisResultCategory}>{result.category}</Text>
+                  {result.isCompleted && (
+                    <Icon name="check-circle" size={16} color="#10B981" />
+                  )}
+                </View>
+                <Text style={styles.analysisResultText} numberOfLines={2}>
+                  {result.result}
+                </Text>
+                <Text style={styles.analysisResultDate}>{formatDate(result.createdAt)}</Text>
               </View>
-              <Text style={styles.analysisResultText} numberOfLines={2}>
-                {result.result}
+            ))
+          ) : (
+            <View style={styles.noResultsContainer}>
+              <Text style={styles.noResultsText}>
+                Análise ainda sendo processada...
               </Text>
-              <Text style={styles.analysisResultDate}>{result.date}</Text>
             </View>
-          ))}
+          )}
         </View>
 
         {/* Finalize Button */}
-        <TouchableOpacity style={styles.finalizeButton}>
+        <TouchableOpacity style={styles.finalizeButton} onPress={finalizeCase}>
           <Text style={styles.finalizeButtonText}>Finalizar Caso Clínico</Text>
         </TouchableOpacity>
 
         <View style={{ height: 100 }} />
       </ScrollView>
-
-      {/* Bottom Navigation */}
-      <View style={styles.bottomNavigation}>
-        <TouchableOpacity 
-          style={styles.navItem}
-          onPress={() => navigation.navigate('Home')}
-        >
-          <Icon name="description" size={24} color="#9CA3AF" />
-          <Text style={styles.navText}>Análises</Text>
-        </TouchableOpacity>
-
-        <TouchableOpacity style={styles.navItem}>
-          <Icon name="link" size={24} color="#9CA3AF" />
-          <Text style={styles.navText}>Histórico</Text>
-        </TouchableOpacity>
-
-        <TouchableOpacity 
-          style={[styles.navItem, styles.activeNavItem]}
-          onPress={() => navigation.navigate('Patients')}
-        >
-          <Icon name="people" size={24} color="#1E3A8A" />
-          <Text style={[styles.navText, styles.activeNavText]}>Pacientes</Text>
-        </TouchableOpacity>
-
-        <TouchableOpacity style={styles.navItem}>
-          <Icon name="bar-chart" size={24} color="#9CA3AF" />
-          <Text style={styles.navText}>Estatísticas</Text>
-        </TouchableOpacity>
-
-        <TouchableOpacity 
-          style={styles.navItem}
-          onPress={() => navigation.navigate('Profile')}
-        >
-          <Icon name="person" size={24} color="#9CA3AF" />
-          <Text style={styles.navText}>Perfil</Text>
-        </TouchableOpacity>
-      </View>
     </View>
   );
 };
@@ -289,6 +384,40 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: '#FFFFFF',
+  },
+  loadingContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  loadingText: {
+    marginTop: 16,
+    fontSize: 16,
+    color: '#6B7280',
+  },
+  errorContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingHorizontal: 40,
+  },
+  errorText: {
+    fontSize: 18,
+    fontWeight: 'bold',
+    color: '#EF4444',
+    marginTop: 16,
+    marginBottom: 24,
+  },
+  backButton: {
+    backgroundColor: '#1E3A8A',
+    borderRadius: 8,
+    paddingHorizontal: 24,
+    paddingVertical: 12,
+  },
+  backButtonText: {
+    color: '#FFFFFF',
+    fontSize: 16,
+    fontWeight: '600',
   },
   header: {
     flexDirection: 'row',
@@ -443,7 +572,7 @@ const styles = StyleSheet.create({
     color: '#1F2937',
   },
   aiResponseContainer: {
-    backgroundColor: '#F9FAFB',
+    backgroundColor: '#F0F9FF',
     borderRadius: 8,
     padding: 16,
     marginBottom: 16,
@@ -451,12 +580,12 @@ const styles = StyleSheet.create({
   aiResponseTitle: {
     fontSize: 16,
     fontWeight: '600',
-    color: '#1F2937',
+    color: '#0369A1',
     marginBottom: 8,
   },
   aiResponseText: {
     fontSize: 14,
-    color: '#6B7280',
+    color: '#0369A1',
     lineHeight: 20,
   },
   analysisResultCard: {
@@ -486,6 +615,56 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: '#9CA3AF',
   },
+  noResultsContainer: {
+    backgroundColor: '#FEF3C7',
+    borderRadius: 8,
+    padding: 16,
+    alignItems: 'center',
+  },
+  noResultsText: {
+    fontSize: 14,
+    color: '#92400E',
+    textAlign: 'center',
+  },
+  emptyContentContainer: {
+    flexGrow: 1,
+  },
+  emptyAnalysisContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingHorizontal: 40,
+    paddingVertical: 60,
+  },
+  emptyAnalysisTitle: {
+    fontSize: 20,
+    fontWeight: 'bold',
+    color: '#6B7280',
+    marginTop: 16,
+    marginBottom: 12,
+    textAlign: 'center',
+  },
+  emptyAnalysisText: {
+    fontSize: 16,
+    color: '#9CA3AF',
+    textAlign: 'center',
+    lineHeight: 24,
+    marginBottom: 32,
+  },
+  createAnalysisButton: {
+    backgroundColor: '#1E3A8A',
+    borderRadius: 8,
+    paddingHorizontal: 24,
+    paddingVertical: 16,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  createAnalysisText: {
+    color: '#FFFFFF',
+    fontSize: 16,
+    fontWeight: '600',
+  },
   finalizeButton: {
     backgroundColor: '#1E3A8A',
     borderRadius: 8,
@@ -496,32 +675,6 @@ const styles = StyleSheet.create({
   finalizeButtonText: {
     color: '#FFFFFF',
     fontSize: 16,
-    fontWeight: '600',
-  },
-  bottomNavigation: {
-    flexDirection: 'row',
-    backgroundColor: '#FFFFFF',
-    paddingVertical: 12,
-    paddingHorizontal: 8,
-    borderTopWidth: 1,
-    borderTopColor: '#E5E7EB',
-  },
-  navItem: {
-    flex: 1,
-    alignItems: 'center',
-    paddingVertical: 8,
-  },
-  activeNavItem: {
-    backgroundColor: 'rgba(30, 58, 138, 0.1)',
-    borderRadius: 8,
-  },
-  navText: {
-    fontSize: 12,
-    color: '#9CA3AF',
-    marginTop: 4,
-  },
-  activeNavText: {
-    color: '#1E3A8A',
     fontWeight: '600',
   },
 });

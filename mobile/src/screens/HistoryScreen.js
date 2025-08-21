@@ -12,7 +12,7 @@ import {
   RefreshControl,
 } from 'react-native';
 import Icon from 'react-native-vector-icons/MaterialIcons';
-import { useAuth } from '../context/AuthContext';
+import axios from 'axios';
 
 const HistoryScreen = ({ navigation }) => {
   const [analyses, setAnalyses] = useState([]);
@@ -20,7 +20,6 @@ const HistoryScreen = ({ navigation }) => {
   const [refreshing, setRefreshing] = useState(false);
   const [searchText, setSearchText] = useState('');
   const [filteredAnalyses, setFilteredAnalyses] = useState([]);
-  const { user } = useAuth();
 
   useEffect(() => {
     fetchAnalyses();
@@ -32,23 +31,23 @@ const HistoryScreen = ({ navigation }) => {
 
   const fetchAnalyses = async () => {
     try {
-      const response = await fetch('http://192.168.1.100:3000/api/analyses', {
-        method: 'GET',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${user.token}`,
-        },
-      });
-
-      if (response.ok) {
-        const data = await response.json();
-        setAnalyses(data);
-      } else {
-        Alert.alert('Erro', 'Falha ao carregar histórico de análises');
-      }
+      setLoading(true);
+      const response = await axios.get('/analysis/recent');
+      
+      // A API retorna um array de análises
+      const analysesData = response.data || [];
+      setAnalyses(analysesData);
+      
     } catch (error) {
       console.error('Erro ao buscar análises:', error);
-      Alert.alert('Erro', 'Erro de conexão. Verifique sua internet.');
+      
+      // Se der erro na API, define array vazio para parar o loading
+      setAnalyses([]);
+      
+      // Só mostra alerta se não for erro de conexão simples
+      if (error.response && error.response.status !== 404) {
+        Alert.alert('Erro', 'Falha ao carregar histórico de análises');
+      }
     } finally {
       setLoading(false);
       setRefreshing(false);
@@ -67,7 +66,8 @@ const HistoryScreen = ({ navigation }) => {
     }
 
     const filtered = analyses.filter(analysis => 
-      analysis.diagnosis?.toLowerCase().includes(searchText.toLowerCase()) ||
+      analysis.title?.toLowerCase().includes(searchText.toLowerCase()) ||
+      analysis.description?.toLowerCase().includes(searchText.toLowerCase()) ||
       analysis.symptoms?.toLowerCase().includes(searchText.toLowerCase()) ||
       formatDate(analysis.createdAt).includes(searchText)
     );
@@ -113,7 +113,33 @@ const HistoryScreen = ({ navigation }) => {
   };
 
   const navigateToResult = (analysis) => {
-    navigation.navigate('AnalysisResult', { analysis });
+    navigation.navigate('AnalysisResult', { analysisId: analysis.id });
+  };
+
+  const getAnalysisTitle = (analysis) => {
+    // Tentar extrair o diagnóstico principal dos resultados
+    if (analysis.AnalysisResults && analysis.AnalysisResults.length > 0) {
+      const mainDiagnosis = analysis.AnalysisResults.find(
+        result => result.category === 'Diagnostico principal' || result.category === 'Diagnóstico principal'
+      );
+      if (mainDiagnosis) {
+        return mainDiagnosis.result;
+      }
+    }
+    
+    // Fallback para título da análise
+    return analysis.title || 'Análise sem título';
+  };
+
+  const getAnalysisPreview = (analysis) => {
+    // Usar descrição ou sintomas como preview
+    if (analysis.description) {
+      return analysis.description;
+    }
+    if (analysis.symptoms) {
+      return `Sintomas: ${analysis.symptoms}`;
+    }
+    return 'Clique para ver detalhes';
   };
 
   const AnalysisItem = ({ analysis }) => (
@@ -123,16 +149,26 @@ const HistoryScreen = ({ navigation }) => {
     >
       <View style={styles.analysisContent}>
         <Text style={styles.analysisTitle} numberOfLines={1}>
-          {analysis.diagnosis || 'Diagnóstico não especificado'}
+          {getAnalysisTitle(analysis)}
         </Text>
         <Text style={styles.analysisTime}>
           {formatDate(analysis.createdAt)} • {formatTime(analysis.createdAt)}
         </Text>
-        {analysis.symptoms && (
-          <Text style={styles.analysisSymptoms} numberOfLines={2}>
-            {analysis.symptoms}
+        <Text style={styles.analysisSymptoms} numberOfLines={2}>
+          {getAnalysisPreview(analysis)}
+        </Text>
+        
+        {/* Status da análise */}
+        <View style={styles.statusContainer}>
+          <View style={[
+            styles.statusDot,
+            { backgroundColor: analysis.status === 'completed' ? '#10B981' : analysis.status === 'processing' ? '#F59E0B' : '#EF4444' }
+          ]} />
+          <Text style={styles.statusText}>
+            {analysis.status === 'completed' ? 'Concluída' : 
+             analysis.status === 'processing' ? 'Processando' : 'Pendente'}
           </Text>
-        )}
+        </View>
       </View>
       <Icon name="chevron-right" size={24} color="#64748b" />
     </TouchableOpacity>
@@ -142,6 +178,9 @@ const HistoryScreen = ({ navigation }) => {
     return (
       <SafeAreaView style={styles.container}>
         <View style={styles.header}>
+          <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backButton}>
+            <Icon name="arrow-back" size={24} color="#1e293b" />
+          </TouchableOpacity>
           <Text style={styles.headerTitle}>Histórico de análises EYA</Text>
         </View>
         <View style={styles.loadingContainer}>
@@ -192,8 +231,17 @@ const HistoryScreen = ({ navigation }) => {
             <Icon name="history" size={64} color="#cbd5e1" />
             <Text style={styles.emptyTitle}>Nenhuma análise encontrada</Text>
             <Text style={styles.emptySubtitle}>
-              {searchText ? 'Tente uma pesquisa diferente' : 'Você ainda não fez nenhuma análise'}
+              {searchText ? 'Tente uma pesquisa diferente' : 'Você ainda não fez nenhuma análise. Comece criando uma nova análise!'}
             </Text>
+            {!searchText && (
+              <TouchableOpacity 
+                style={styles.emptyActionButton}
+                onPress={() => navigation.navigate('Analysis')}
+              >
+                <Icon name="add" size={20} color="#FFFFFF" style={{ marginRight: 8 }} />
+                <Text style={styles.emptyActionText}>Criar Primeira Análise</Text>
+              </TouchableOpacity>
+            )}
           </View>
         ) : (
           dateKeys.map(dateKey => (
@@ -210,12 +258,14 @@ const HistoryScreen = ({ navigation }) => {
       </ScrollView>
 
       {/* Floating Action Button */}
-      <TouchableOpacity 
-        style={styles.fab}
-        onPress={() => navigation.navigate('Analysis')}
-      >
-        <Text style={styles.fabText}>Pergunte a EYA</Text>
-      </TouchableOpacity>
+      {dateKeys.length > 0 && (
+        <TouchableOpacity 
+          style={styles.fab}
+          onPress={() => navigation.navigate('Analysis')}
+        >
+          <Text style={styles.fabText}>Pergunte a EYA</Text>
+        </TouchableOpacity>
+      )}
     </SafeAreaView>
   );
 };
@@ -230,6 +280,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     paddingHorizontal: 20,
     paddingVertical: 15,
+    paddingTop: 50,
     backgroundColor: '#fff',
     borderBottomWidth: 1,
     borderBottomColor: '#e2e8f0',
@@ -277,6 +328,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
     paddingVertical: 100,
+    paddingHorizontal: 40,
   },
   emptyTitle: {
     fontSize: 18,
@@ -284,12 +336,27 @@ const styles = StyleSheet.create({
     color: '#64748b',
     marginTop: 20,
     marginBottom: 10,
+    textAlign: 'center',
   },
   emptySubtitle: {
     fontSize: 14,
     color: '#94a3b8',
     textAlign: 'center',
-    paddingHorizontal: 40,
+    lineHeight: 20,
+    marginBottom: 24,
+  },
+  emptyActionButton: {
+    backgroundColor: '#1e293b',
+    borderRadius: 8,
+    paddingHorizontal: 24,
+    paddingVertical: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  emptyActionText: {
+    color: '#FFFFFF',
+    fontSize: 16,
+    fontWeight: '600',
   },
   dateSection: {
     marginBottom: 30,
@@ -338,6 +405,22 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: '#64748b',
     lineHeight: 18,
+    marginBottom: 8,
+  },
+  statusContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  statusDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    marginRight: 6,
+  },
+  statusText: {
+    fontSize: 12,
+    color: '#64748b',
+    fontWeight: '500',
   },
   fab: {
     position: 'absolute',
