@@ -4,14 +4,20 @@ const OpenAI = require('openai');
 const fs = require('fs');
 const path = require('path');
 
-// ===== Modelos configuráveis (ENV) =====
+// =====================
+// Config de modelos
+// =====================
 const MODEL_TEXT   = process.env.OPENAI_TEXT_MODEL   || 'gpt-4o';
 const MODEL_VISION = process.env.OPENAI_VISION_MODEL || MODEL_TEXT;
 
-// ===== OpenAI =====
+// =====================
+// OpenAI
+// =====================
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
-// ===== Constantes de estrutura =====
+// =====================
+// Schema obrigatório
+// =====================
 const REQUIRED_CATEGORIES = [
   'diagnostico_principal',
   'etiologia',
@@ -22,6 +28,11 @@ const REQUIRED_CATEGORIES = [
   'guia_prescricao'
 ];
 
+/**
+ * IMPORTANTE:
+ * Mantivemos o mesmo schema (resultado:string, justificativa:string, confianca:number) para não quebrar o salvamento.
+ * O "resultado" agora vem ricamente formatado (markdown leve) com subtítulos e listas.
+ */
 const JSON_SCHEMA_TEXT = `
 Objeto JSON com 7 chaves obrigatórias:
 {
@@ -33,12 +44,21 @@ Objeto JSON com 7 chaves obrigatórias:
   "abordagem_terapeutica": { "resultado": string, "confianca": number (0..1), "justificativa": string },
   "guia_prescricao": { "resultado": string, "confianca": number (0..1), "justificativa": string }
 }
-- Todas as chaves são obrigatórias.
-- "confianca" deve ser um número entre 0 e 1.
-- Responder APENAS com JSON válido (sem crases, sem comentários).
+
+Regras:
+- Responder SOMENTE com JSON válido (sem texto extra).
+- Campo "resultado" deve ser um texto rico (markdown leve) com subtítulos "###" e listas "-" ou "•".
+- Sempre que possível, incluir: probabilidades estimadas (%), sinais de alarme, fatores de risco, rastros de evidência e CID-10.
+- Em "abordagem_diagnostica": incluir Diferenciais (3–6 com %), Exames prioritários (com motivo/impacto), Red flags, e critérios clínicos se houver.
+- Em "abordagem_terapeutica": incluir medidas não farmacológicas (curto e longo prazo), farmacológicas (classes, 1ª/2ª linha), doses usuais (adulto/ajustes), principais efeitos adversos e interações.
+- Em "guia_prescricao": sintetizar um regime possível com posologia (unidades e intervalo), duração típica e monitorização, e alternativas se alergia/contraindicação.
+- "confianca": número entre 0 e 1 (0.00–1.00).
+- Se dados forem insuficientes, explicitar "Dados insuficientes" e orientar coleta/exames.
 `.trim();
 
-// ===== Serviço principal =====
+// =====================
+// Serviço principal
+// =====================
 const processWithAI = async (analysisId) => {
   try {
     const analysis = await Analysis.findByPk(analysisId, {
@@ -57,7 +77,6 @@ const processWithAI = async (analysisId) => {
       imageAnalysis = await analyzeImages(analysis.MedicalImages);
     }
 
-    // Geração SEM MOCK
     const aiAnalysis = await performMedicalAnalysis(medicalPrompt, imageAnalysis);
 
     const savedResults = await saveAnalysisResults(analysis.id, aiAnalysis);
@@ -86,33 +105,44 @@ const processWithAI = async (analysisId) => {
   }
 };
 
-// ===== Prompt base =====
+// =====================
+// Prompt base (DETALHADO)
+// =====================
 const buildMedicalPrompt = (analysis) => {
   const patient = analysis.Patient;
-  return `SISTEMA DE APOIO DIAGNÓSTICO PARA MÉDICOS - ANÁLISE CLÍNICA ESPECIALIZADA
+  return `
+SISTEMA DE APOIO DIAGNÓSTICO PARA MÉDICOS (PT-BR) — MODO DETALHADO
 
-IMPORTANTE: Uso exclusivo por médicos licenciados; apoio ao diagnóstico; não substitui julgamento clínico.
+NOTA: Para uso por profissionais habilitados. Conteúdo não substitui o julgamento clínico.
 
-DADOS CLÍNICOS DO PACIENTE:
+DADOS DO PACIENTE
 - Nome: ${patient?.name || 'Paciente não identificado'}
 - Idade: ${patient?.birthDate ? calculateAge(patient.birthDate) : 'Idade não informada'}
 - Sexo: ${patient?.gender || 'Não informado'}
-- História médica pregressa: ${patient?.medicalHistory || 'Não informada'}
-- Alergias conhecidas: ${patient?.allergies || 'Não informadas'}
+- História pregressa: ${patient?.medicalHistory || 'Não informada'}
+- Alergias: ${patient?.allergies || 'Não informadas'}
 
-APRESENTAÇÃO CLÍNICA ATUAL:
-- Motivo da consulta: ${analysis.title}
+CASO ATUAL
+- Motivo/Contexto: ${analysis.title}
 - História da doença atual: ${analysis.description || 'Não fornecida'}
-- Sintomas/achados: ${analysis.symptoms || 'Não fornecidos'}
+- Sintomas/Achados: ${analysis.symptoms || 'Não fornecidos'}
 
-INSTRUÇÕES:
-Forneça análise médica baseada em evidências, terminologia técnica e formato JSON abaixo (sem texto extra).
+INSTRUÇÕES DE FORMATAÇÃO
+- Use o SCHEMA abaixo e responda APENAS com JSON válido.
+- Eleve o nível de detalhe: inclua probabilidades (%), red flags, CID-10 quando aplicável, critérios diagnósticos, impactos de exames, e doses/posologia em linguagem clínica segura.
+- Em cada "resultado", use markdown leve com "###" para subtítulos e "-" para listas (sem tabelas).
+- Mantenha linguagem técnica, objetiva e baseada em evidência; cite diretrizes quando relevante (ex.: AAD, BAD, IDSA, AHA/ACC, etc.), mas sem links.
+
+SCHEMA
 ${JSON_SCHEMA_TEXT}
 
-RESPONDA EXCLUSIVAMENTE COM JSON VÁLIDO.`;
+RETORNE APENAS O JSON.
+`.trim();
 };
 
-// ===== Imagens (usa modelo com visão; gpt-4o aceita imagem) =====
+// =====================
+// Análise de imagens
+// =====================
 const analyzeImages = async (medicalImages) => {
   try {
     console.log(`🖼️ Analisando ${medicalImages.length} imagem(ns) com ${MODEL_VISION}`);
@@ -128,32 +158,37 @@ const analyzeImages = async (medicalImages) => {
         const base64Image = imageBuffer.toString('base64');
         const mimeType = image.mimeType || 'image/jpeg';
 
-        const response = await openai.chat.completions.create({
-          model: MODEL_VISION, // <- era gpt-4-vision-preview
-          messages: [
-            {
-              role: "system",
-              content: "Você é um radiologista especialista. Produza um laudo técnico e objetivo para médicos."
-            },
-            {
-              role: "user",
-              content: [
-                {
-                  type: "text",
-                  text:
-`Gerar laudo radiológico detalhado:
-1) Técnica/qualidade; 2) Anatomia; 3) Achados; 4) Localização; 5) Morfologia; 6) Hipóteses; 7) Exames adicionais.`
-                },
-                {
-                  type: "image_url",
-                  image_url: { url: `data:${mimeType};base64,${base64Image}` }
-                }
-              ]
-            }
-          ],
-          max_tokens: 2000,
-          temperature: 0.1
-        });
+        const response = await withRetries(() =>
+          openai.chat.completions.create({
+            model: MODEL_VISION,
+            messages: [
+              {
+                role: "system",
+                content:
+                  "Você é um especialista em interpretação de imagens médicas (dermatologia/dermatoscopia e radiologia). Produza laudo técnico, objetivo, com achados descritivos, impressões diagnósticas diferenciais (com probabilidade) e recomendações de exames adicionais quando pertinentes."
+              },
+              {
+                role: "user",
+                content: [
+                  {
+                    type: "text",
+                    text:
+`Gere LAUDO detalhado:
+- Técnica/qualidade da imagem
+- Anatomia/região/lesão
+- Achados descritivos (morfologia, distribuição, coloração/padrões)
+- Hipóteses e diferenciais (3–6) com probabilidade estimada
+- Recomendações de exames/complementos (e impacto clínico)
+- Observações de segurança e sinais de alarme`
+                  },
+                  { type: "image_url", image_url: { url: `data:${mimeType};base64,${base64Image}` } }
+                ]
+              }
+            ],
+            max_tokens: 1500,
+            temperature: 0.1
+          })
+        );
 
         const imageAnalysis = response.choices?.[0]?.message?.content || '(sem conteúdo)';
         imageAnalyses.push({
@@ -170,18 +205,20 @@ const analyzeImages = async (medicalImages) => {
 
     if (imageAnalyses.length === 0) return '';
     return (
-      `\n\nRELATÓRIO RADIOLÓGICO DAS IMAGENS ANEXADAS:\n` +
+      `\n\nRELATÓRIO DAS IMAGENS ENVIADAS:\n` +
       imageAnalyses.map(img =>
         `\n=== IMAGEM: ${img.filename} (Tipo: ${img.type}) ===\n${img.analysis}\n`
       ).join('\n')
     );
   } catch (error) {
-    console.error('Erro na análise radiológica:', error);
+    console.error('Erro na análise de imagens:', error);
     return '';
   }
 };
 
-// ===== Geração principal SEM MOCK =====
+// =====================
+// Geração principal
+// =====================
 const performMedicalAnalysis = async (prompt, imageAnalysis) => {
   const fullPrompt = `${prompt}${imageAnalysis || ''}`.trim();
 
@@ -197,7 +234,7 @@ const performMedicalAnalysis = async (prompt, imageAnalysis) => {
     data = tryParseJSON(aiContent);
   }
   if (!data) {
-    aiContent = await regenerateAnalysisWithAI(fullPrompt, /*minimal=*/true);
+    aiContent = await regenerateAnalysisWithAI(fullPrompt, /* minimal */ true);
     data = tryParseJSON(aiContent);
   }
   if (!data) throw new Error('Falha ao obter JSON válido da IA.');
@@ -208,6 +245,7 @@ const performMedicalAnalysis = async (prompt, imageAnalysis) => {
     data = tryParseJSON(aiContent) || data;
   }
 
+  // Normalizar 'confianca'
   for (const c of REQUIRED_CATEGORIES) {
     if (data[c]?.confianca !== undefined) {
       const v = Number(data[c].confianca);
@@ -220,23 +258,27 @@ const performMedicalAnalysis = async (prompt, imageAnalysis) => {
   return data;
 };
 
-// ===== Chamadas auxiliares à IA =====
+// =====================
+// Chamadas auxiliares à IA (com retry 429/5xx)
+// =====================
 async function callAIForJSON(userContent) {
   console.log('🧠 Solicitando JSON à IA com', MODEL_TEXT);
-  const resp = await openai.chat.completions.create({
-    model: MODEL_TEXT, // <- era gpt-4-turbo-preview
-    messages: [
-      {
-        role: "system",
-        content:
-          "Você é um sistema de IA médica para apoio diagnóstico. Responda APENAS com JSON válido conforme o schema fornecido."
-      },
-      { role: "user", content: userContent }
-    ],
-    temperature: 0.2,
-    max_tokens: 4000,
-    response_format: { type: "json_object" }
-  });
+  const resp = await withRetries(() =>
+    openai.chat.completions.create({
+      model: MODEL_TEXT,
+      messages: [
+        {
+          role: "system",
+          content:
+            "Você é um sistema de IA médica. Gere resposta APENAS em JSON válido conforme o schema fornecido. Use linguagem técnica em PT-BR."
+        },
+        { role: "user", content: userContent }
+      ],
+      temperature: 0.2,
+      max_tokens: 4000,
+      response_format: { type: "json_object" }
+    })
+  );
   const content = resp.choices?.[0]?.message?.content ?? '';
   console.log('✅ Resposta IA recebida (tamanho):', content.length);
   return content;
@@ -254,24 +296,28 @@ CONTEÚDO PARA REPARO (NÃO repita nada fora do JSON):
 ${invalidContent}
 
 Responda SOMENTE com JSON válido.
-  `.trim();
+`.trim();
 
-  const resp = await openai.chat.completions.create({
-    model: MODEL_TEXT,
-    messages: [
-      { role: "system", content: "Você conserta JSON para ficar estritamente válido segundo um schema. Responda apenas JSON." },
-      { role: "user", content: prompt }
-    ],
-    temperature: 0,
-    max_tokens: 3500,
-    response_format: { type: "json_object" }
-  });
+  const resp = await withRetries(() =>
+    openai.chat.completions.create({
+      model: MODEL_TEXT,
+      messages: [
+        { role: "system", content: "Você conserta JSON para ficar estritamente válido segundo um schema. Responda apenas JSON." },
+        { role: "user", content: prompt }
+      ],
+      temperature: 0,
+      max_tokens: 3500,
+      response_format: { type: "json_object" }
+    })
+  );
   return resp.choices?.[0]?.message?.content ?? '';
 }
 
 async function regenerateAnalysisWithAI(fullPrompt, minimal = false) {
   console.log('🔁 Regenerando análise com', MODEL_TEXT);
-  const tighten = minimal ? 'Forneça texto objetivo e conciso em cada campo.' : 'Forneça justificativas clínicas robustas.';
+  const tighten = minimal
+    ? 'Forneça texto objetivo e conciso em cada campo.'
+    : 'Forneça justificativas clínicas robustas, diferenciais com % e plano terapêutico prático (inclua doses usuais).';
   const prompt = `
 Refaça a resposta obedecendo ao SCHEMA e às DIRETRIZES. Responda SOMENTE com JSON.
 
@@ -287,18 +333,20 @@ CASO CLÍNICO:
 ${fullPrompt}
 
 ${tighten}
-  `.trim();
+`.trim();
 
-  const resp = await openai.chat.completions.create({
-    model: MODEL_TEXT,
-    messages: [
-      { role: "system", content: "Você é IA médica; gere JSON estritamente válido conforme schema. Sem texto extra." },
-      { role: "user", content: prompt }
-    ],
-    temperature: minimal ? 0.1 : 0.2,
-    max_tokens: 3800,
-    response_format: { type: "json_object" }
-  });
+  const resp = await withRetries(() =>
+    openai.chat.completions.create({
+      model: MODEL_TEXT,
+      messages: [
+        { role: "system", content: "Você é IA médica; gere JSON estritamente válido conforme schema. Sem texto extra." },
+        { role: "user", content: prompt }
+      ],
+      temperature: minimal ? 0.1 : 0.2,
+      max_tokens: 3800,
+      response_format: { type: "json_object" }
+    })
+  );
   return resp.choices?.[0]?.message?.content ?? '';
 }
 
@@ -315,22 +363,26 @@ CATEGORIAS FALTANTES: ${missingKeys.join(', ')}
 
 OBJETO PARCIAL:
 ${JSON.stringify(partialObj)}
-  `.trim();
+`.trim();
 
-  const resp = await openai.chat.completions.create({
-    model: MODEL_TEXT,
-    messages: [
-      { role: "system", content: "Você completa JSONs médicos para aderir ao schema. Responda apenas JSON." },
-      { role: "user", content: prompt }
-    ],
-    temperature: 0.2,
-    max_tokens: 3500,
-    response_format: { type: "json_object" }
-  });
+  const resp = await withRetries(() =>
+    openai.chat.completions.create({
+      model: MODEL_TEXT,
+      messages: [
+        { role: "system", content: "Você completa JSONs médicos para aderir ao schema. Responda apenas JSON." },
+        { role: "user", content: prompt }
+      ],
+      temperature: 0.2,
+      max_tokens: 3500,
+      response_format: { type: "json_object" }
+    })
+  );
   return resp.choices?.[0]?.message?.content ?? '';
 }
 
-// ===== Persistência =====
+// =====================
+// Persistência
+// =====================
 const saveAnalysisResults = async (analysisId, aiAnalysis) => {
   console.log('💾 Salvando resultados da análise médica...');
   const categoryMapping = {
@@ -365,7 +417,9 @@ const saveAnalysisResults = async (analysisId, aiAnalysis) => {
   return savedResults;
 };
 
-// ===== Utilitários =====
+// =====================
+// Utils
+// =====================
 const clamp01 = (n) => (Number.isFinite(n) ? Math.min(Math.max(n, 0), 1) : 0.75);
 
 const calculateAge = (birthDate) => {
@@ -382,6 +436,25 @@ const tryParseJSON = (txt) => {
   try { return JSON.parse(txt); } catch { return null; }
 };
 
+// Retry simples com backoff exponencial + jitter para 429/5xx
+async function withRetries(fn, { tries = 4, baseMs = 800 } = {}) {
+  let lastErr;
+  for (let attempt = 1; attempt <= tries; attempt++) {
+    try {
+      return await fn();
+    } catch (err) {
+      lastErr = err;
+      const status = err?.status || err?.code;
+      const retriable = status === 429 || (typeof status === 'number' && status >= 500);
+      if (!retriable || attempt === tries) throw err;
+      const delay = Math.round(baseMs * Math.pow(2, attempt - 1) + Math.random() * 200);
+      console.warn(`⏳ Retry ${attempt}/${tries - 1} em ${delay}ms (motivo: ${status})`);
+      await new Promise(r => setTimeout(r, delay));
+    }
+  }
+  throw lastErr;
+}
+
 const validateOpenAIConfig = () => {
   const key = process.env.OPENAI_API_KEY;
   if (!key) {
@@ -397,18 +470,22 @@ const validateOpenAIConfig = () => {
   return true;
 };
 
-// ===== Exports =====
+// =====================
+// Exports
+// =====================
 module.exports = {
   processWithAI,
   validateOpenAIConfig,
   testOpenAIConnection: async () => {
     try {
       if (!process.env.OPENAI_API_KEY) return false;
-      const res = await openai.chat.completions.create({
-        model: MODEL_TEXT,
-        messages: [{ role: "user", content: "Responda apenas: OK" }],
-        max_tokens: 5
-      });
+      const res = await withRetries(() =>
+        openai.chat.completions.create({
+          model: MODEL_TEXT,
+          messages: [{ role: "user", content: "Responda apenas: OK" }],
+          max_tokens: 5
+        })
+      );
       return (res.choices?.[0]?.message?.content || '').trim().startsWith('OK');
     } catch {
       return false;

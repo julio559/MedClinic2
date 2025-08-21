@@ -1,19 +1,28 @@
-import React, { useState, useEffect } from 'react';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, TextInput, StatusBar, Alert } from 'react-native';
+import React, { useState, useEffect, useMemo } from 'react';
+import {
+  View,
+  Text,
+  StyleSheet,
+  ScrollView,
+  TouchableOpacity,
+  StatusBar,
+  RefreshControl,
+  Alert,
+} from 'react-native';
 import Icon from 'react-native-vector-icons/MaterialIcons';
 import { useAuth } from '../context/AuthContext';
 import axios from 'axios';
 
 const HomeScreen = ({ navigation }) => {
   const { user } = useAuth();
+
   const [stats, setStats] = useState({
-    totalAnalyses: 0, 
-    completedAnalyses: 0, 
-    processingAnalyses: 0, 
-    totalPatients: 0
+    totalAnalyses: 0,
+    completedAnalyses: 0,
+    processingAnalyses: 0,
+    totalPatients: 0,
   });
-  const [eyaQuestion, setEyaQuestion] = useState('');
-  const [loading, setLoading] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
 
   useEffect(() => {
     loadDashboardData();
@@ -22,158 +31,193 @@ const HomeScreen = ({ navigation }) => {
   const loadDashboardData = async () => {
     try {
       const statsResponse = await axios.get('/users/stats');
-      setStats(statsResponse.data);
+      setStats(statsResponse.data || {});
     } catch (error) {
       console.error('Error loading dashboard:', error);
-      // Se falhar, mantém os valores zerados
     }
   };
 
-  const handleEyaQuestion = async () => {
-    if (!eyaQuestion.trim()) {
-      Alert.alert('Aviso', 'Digite uma pergunta para a EYA');
-      return;
-    }
-
-    setLoading(true);
-    try {
-      // Simular resposta da EYA
-      await new Promise(resolve => setTimeout(resolve, 2000));
-      
-      Alert.alert(
-        'Resposta da EYA',
-        `Pergunta: "${eyaQuestion}"\\n\\nResposta: Esta é uma resposta simulada da EYA. Em uma implementação real, aqui seria processada pela inteligência artificial médica.`,
-        [
-          { text: 'OK', onPress: () => setEyaQuestion('') }
-        ]
-      );
-    } catch (error) {
-      Alert.alert('Erro', 'Erro ao processar pergunta');
-    } finally {
-      setLoading(false);
-    }
+  const onRefresh = async () => {
+    setRefreshing(true);
+    await loadDashboardData();
+    setRefreshing(false);
   };
 
-  const navigateToHistory = () => {
-    navigation.navigate('History');
-  };
+  // Derivados p/ gráfico de barras
+  const chartData = useMemo(() => {
+    const completed = Number(stats.completedAnalyses || 0);
+    const processing = Number(stats.processingAnalyses || 0);
+    const total = Number(stats.totalAnalyses || 0);
+    const other = Math.max(total - (completed + processing), 0); // pendentes/failed
+    const maxVal = Math.max(completed, processing, other, 1);
+    return { completed, processing, other, maxVal };
+  }, [stats]);
 
-  const navigateToStatistics = () => {
-    Alert.alert('Estatísticas', 'Funcionalidade em desenvolvimento');
-  };
+  const patientsPerAnalysisPct = useMemo(() => {
+    const totalA = Number(stats.totalAnalyses || 0);
+    const totalP = Number(stats.totalPatients || 0);
+    if (totalP === 0 && totalA === 0) return 0;
+    const ratio = totalP ? Math.min(totalA / (totalP || 1), 1) : (totalA > 0 ? 1 : 0);
+    return Math.round(ratio * 100);
+  }, [stats]);
+
+  const navigateToHistory = () => navigation.navigate('History');
+  const navigateToNewAnalysis = () => navigation.navigate('Analysis');
 
   return (
     <View style={styles.container}>
       <StatusBar barStyle="light-content" backgroundColor="#1E3A8A" />
-      
-      {/* Header with Doctor Info */}
+
+      {/* Header com info do médico */}
       <View style={styles.header}>
-        <TouchableOpacity style={styles.settingsButton}>
+        <TouchableOpacity style={styles.settingsButton} onPress={() => Alert.alert('Configurações', 'Em breve')}>
           <Icon name="settings" size={24} color="#FFFFFF" />
         </TouchableOpacity>
-        
+
         <View style={styles.doctorContainer}>
           <View style={styles.avatarContainer}>
             <View style={styles.avatar}>
               <Icon name="person" size={60} color="#8B5A2B" />
             </View>
           </View>
-          <Text style={styles.doctorName}>
-            {user?.name || 'Dr. Ethan Carter'}
-          </Text>
-          <Text style={styles.crmNumber}>
-            CRM {user?.crm || '123456'}
-          </Text>
+          <Text style={styles.doctorName}>{user?.name || 'Dr(a). Usuário'}</Text>
+          <Text style={styles.crmNumber}>CRM {user?.crm || '—'}</Text>
         </View>
       </View>
 
-      {/* Main Content */}
-      <View style={styles.mainContent}>
-        {/* Ask EYA Section */}
-        <View style={styles.askEyaContainer}>
-          <TextInput
-            style={styles.askEyaInput}
-            placeholder="Pergunta a EYA"
-            placeholderTextColor="#9CA3AF"
-            value={eyaQuestion}
-            onChangeText={setEyaQuestion}
-            multiline
-          />
-          <TouchableOpacity 
-            style={[styles.sendButton, loading && styles.sendButtonDisabled]}
-            onPress={handleEyaQuestion}
-            disabled={loading}
-          >
-            <Text style={styles.sendButtonText}>
-              {loading ? 'enviando...' : 'enviar'}
-            </Text>
-          </TouchableOpacity>
-        </View>
-
-        {/* New Analysis Button */}
-        <TouchableOpacity 
-          style={styles.newAnalysisButton}
-          onPress={() => navigation.navigate('Analysis')}
-        >
+      <ScrollView
+        style={styles.mainContent}
+        showsVerticalScrollIndicator={false}
+        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
+      >
+        {/* Nova Análise */}
+        <TouchableOpacity style={styles.newAnalysisButton} onPress={navigateToNewAnalysis}>
           <Text style={styles.newAnalysisText}>Nova Análise</Text>
         </TouchableOpacity>
 
-        {/* Quick Summary */}
-        <View style={styles.summarySection}>
-          <Text style={styles.sectionTitle}>Quick Summary</Text>
-          
-          <View style={styles.summaryGrid}>
-            <TouchableOpacity 
-              style={styles.summaryCard}
-              onPress={() => navigation.navigate('Analysis')}
-            >
-              <Icon name="description" size={24} color="#6B7280" style={styles.summaryIcon} />
-              <View style={styles.summaryContent}>
-                <Text style={styles.summaryTitle}>Análises</Text>
-                <Text style={styles.summarySubtitle}>
-                  {stats.totalAnalyses} {stats.totalAnalyses === 1 ? 'nova análise' : 'novas análises'}
-                </Text>
-              </View>
-            </TouchableOpacity>
+        {/* Resumo / KPIs */}
+        <View style={styles.section}>
+          <Text style={styles.sectionTitle}>Resumo</Text>
 
-            <TouchableOpacity 
-              style={styles.summaryCard}
-              onPress={navigateToHistory}
-            >
-              <Icon name="notifications" size={24} color="#6B7280" style={styles.summaryIcon} />
-              <View style={styles.summaryContent}>
-                <Text style={styles.summaryTitle}>Histórico EYA</Text>
-                <Text style={styles.summarySubtitle}>
-                  {stats.completedAnalyses} {stats.completedAnalyses === 1 ? 'pergunta' : 'perguntas'}
-                </Text>
+          <View style={styles.kpiRow}>
+            <View style={styles.kpiCard}>
+              <View style={styles.kpiIconWrap}>
+                <Icon name="description" size={18} color="#1E3A8A" />
               </View>
-            </TouchableOpacity>
+              <Text style={styles.kpiLabel}>Análises</Text>
+              <Text style={styles.kpiValue}>{stats.totalAnalyses || 0}</Text>
+            </View>
 
-            <TouchableOpacity 
-              style={styles.summaryCard}
-              onPress={navigateToStatistics}
-            >
-              <Icon name="schedule" size={24} color="#6B7280" style={styles.summaryIcon} />
-              <View style={styles.summaryContent}>
-                <Text style={styles.summaryTitle}>Clinical Tip</Text>
-                <Text style={styles.summarySubtitle}>Daily clinical tip</Text>
+            <View style={styles.kpiCard}>
+              <View style={styles.kpiIconWrap}>
+                <Icon name="check-circle" size={18} color="#059669" />
               </View>
+              <Text style={styles.kpiLabel}>Concluídas</Text>
+              <Text style={styles.kpiValue}>{stats.completedAnalyses || 0}</Text>
+            </View>
+
+            <View style={styles.kpiCard}>
+              <View style={styles.kpiIconWrap}>
+                <Icon name="hourglass-bottom" size={18} color="#7C3AED" />
+              </View>
+              <Text style={styles.kpiLabel}>Processando</Text>
+              <Text style={styles.kpiValue}>{stats.processingAnalyses || 0}</Text>
+            </View>
+
+            <View style={styles.kpiCard}>
+              <View style={styles.kpiIconWrap}>
+                <Icon name="people" size={18} color="#2563EB" />
+              </View>
+              <Text style={styles.kpiLabel}>Pacientes</Text>
+              <Text style={styles.kpiValue}>{stats.totalPatients || 0}</Text>
+            </View>
+          </View>
+        </View>
+
+        {/* Gráfico: Status das análises (BARRAS) */}
+        <View style={styles.section}>
+          <Text style={styles.sectionTitle}>Status das análises</Text>
+
+          <View style={styles.chartBox}>
+            <View style={styles.chartGrid}>
+              <Bar
+                label="Concl."
+                value={chartData.completed}
+                max={chartData.maxVal}
+                hint={`${chartData.completed}`}
+                color="#059669"
+              />
+              <Bar
+                label="Proc."
+                value={chartData.processing}
+                max={chartData.maxVal}
+                hint={`${chartData.processing}`}
+                color="#7C3AED"
+              />
+              <Bar
+                label="Outros"
+                value={chartData.other}
+                max={chartData.maxVal}
+                hint={`${chartData.other}`}
+                color="#9CA3AF"
+              />
+            </View>
+          </View>
+        </View>
+
+        {/* Proporção Pacientes x Análises (Progress) */}
+        <View style={styles.section}>
+          <Text style={styles.sectionTitle}>Cobertura de atendimentos</Text>
+          <Text style={styles.progressCaption}>
+            Pacientes com pelo menos uma análise (estimativa)
+          </Text>
+
+          <View style={styles.progressBarOuter}>
+            <View style={[styles.progressBarInner, { width: `${patientsPerAnalysisPct}%` }]} />
+          </View>
+          <Text style={styles.progressPct}>{patientsPerAnalysisPct}%</Text>
+        </View>
+
+        {/* Acesso rápido */}
+        <View style={styles.section}>
+          <Text style={styles.sectionTitle}>Acesso rápido</Text>
+          <View style={styles.quickActionsRow}>
+            <TouchableOpacity style={styles.quickAction} onPress={navigateToNewAnalysis}>
+              <Icon name="add-circle-outline" size={22} color="#1E3A8A" />
+              <Text style={styles.quickActionText}>Nova análise</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.quickAction} onPress={navigateToHistory}>
+              <Icon name="history" size={22} color="#1E3A8A" />
+              <Text style={styles.quickActionText}>Histórico</Text>
             </TouchableOpacity>
           </View>
         </View>
-      </View>
 
-      {/* Bottom Navigation */}
-    
+        <View style={{ height: 24 }} />
+      </ScrollView>
     </View>
   );
 };
 
+/** Barra simples p/ o gráfico (sem libs) */
+const Bar = ({ label, value, max, hint, color }) => {
+  const maxHeight = 140; // px
+  const h = Math.max(6, Math.round((Number(value || 0) / Math.max(max, 1)) * maxHeight));
+
+  return (
+    <View style={styles.barCol}>
+      <View style={[styles.bar, { height: h, backgroundColor: color }]} />
+      <Text style={styles.barHint}>{hint}</Text>
+      <Text style={styles.barLabel}>{label}</Text>
+    </View>
+  );
+};
+
+export default HomeScreen;
+
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: '#F8F9FA',
-  },
+  container: { flex: 1, backgroundColor: '#F8F9FA' },
+
   header: {
     backgroundColor: '#1E3A8A',
     paddingTop: 50,
@@ -181,153 +225,97 @@ const styles = StyleSheet.create({
     paddingHorizontal: 20,
     position: 'relative',
   },
-  settingsButton: {
-    position: 'absolute',
-    top: 50,
-    right: 20,
-    padding: 8,
-  },
-  doctorContainer: {
-    alignItems: 'center',
-    marginTop: 20,
-  },
-  avatarContainer: {
-    marginBottom: 16,
-  },
+  settingsButton: { position: 'absolute', top: 50, right: 20, padding: 8 },
+  doctorContainer: { alignItems: 'center', marginTop: 20 },
+  avatarContainer: { marginBottom: 16 },
   avatar: {
-    width: 120,
-    height: 120,
-    borderRadius: 60,
-    backgroundColor: '#F3E8D1',
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderWidth: 4,
-    borderColor: 'rgba(255, 255, 255, 0.2)',
+    width: 120, height: 120, borderRadius: 60, backgroundColor: '#F3E8D1',
+    alignItems: 'center', justifyContent: 'center',
+    borderWidth: 4, borderColor: 'rgba(255, 255, 255, 0.2)',
   },
-  doctorName: {
-    fontSize: 24,
-    fontWeight: 'bold',
-    color: '#FFFFFF',
-    marginBottom: 4,
-  },
-  crmNumber: {
-    fontSize: 16,
-    color: 'rgba(255, 255, 255, 0.8)',
-  },
-  mainContent: {
-    flex: 1,
-    padding: 20,
-  },
-  askEyaContainer: {
-    flexDirection: 'row',
-    marginBottom: 20,
-    gap: 12,
-  },
-  askEyaInput: {
-    flex: 1,
-    borderWidth: 1,
-    borderColor: '#E5E7EB',
-    borderRadius: 8,
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-    fontSize: 16,
-    backgroundColor: '#FFFFFF',
-    minHeight: 48,
-  },
-  sendButton: {
-    backgroundColor: '#1E3A8A',
-    borderRadius: 8,
-    paddingHorizontal: 24,
-    paddingVertical: 12,
-    justifyContent: 'center',
-    minHeight: 48,
-  },
-  sendButtonDisabled: {
-    backgroundColor: '#9CA3AF',
-  },
-  sendButtonText: {
-    color: '#FFFFFF',
-    fontSize: 16,
-    fontWeight: '600',
-  },
+  doctorName: { fontSize: 24, fontWeight: 'bold', color: '#FFFFFF', marginBottom: 4 },
+  crmNumber: { fontSize: 16, color: 'rgba(255, 255, 255, 0.8)' },
+
+  mainContent: { flex: 1, padding: 20 },
+
+  // Botão Nova Análise
   newAnalysisButton: {
     backgroundColor: '#1E3A8A',
-    borderRadius: 8,
+    borderRadius: 10,
     padding: 16,
     alignItems: 'center',
-    marginBottom: 24,
+    marginBottom: 20,
   },
-  newAnalysisText: {
-    color: '#FFFFFF',
-    fontSize: 16,
-    fontWeight: '600',
-  },
-  summarySection: {
+  newAnalysisText: { color: '#FFFFFF', fontSize: 16, fontWeight: '600' },
+
+  // Seções
+  section: { marginBottom: 20 },
+  sectionTitle: { fontSize: 20, fontWeight: 'bold', color: '#1F2937', marginBottom: 12 },
+
+  // KPIs
+  kpiRow: { flexDirection: 'row', gap: 10 },
+  kpiCard: {
     flex: 1,
-  },
-  sectionTitle: {
-    fontSize: 20,
-    fontWeight: 'bold',
-    color: '#1F2937',
-    marginBottom: 16,
-  },
-  summaryGrid: {
-    gap: 12,
-  },
-  summaryCard: {
     backgroundColor: '#FFFFFF',
     borderRadius: 12,
-    padding: 16,
+    padding: 12,
+    borderWidth: 1, borderColor: '#F3F4F6',
+  },
+  kpiIconWrap: {
+    alignSelf: 'flex-start',
+    backgroundColor: '#F3F4F6',
+    borderRadius: 8,
+    padding: 6,
+    marginBottom: 8,
+  },
+  kpiLabel: { fontSize: 12, color: '#6B7280' },
+  kpiValue: { fontSize: 20, fontWeight: '800', color: '#1F2937', marginTop: 2 },
+
+  // Chart (barras)
+  chartBox: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 12,
+    paddingVertical: 16,
+    paddingHorizontal: 12,
+    borderWidth: 1, borderColor: '#F3F4F6',
+  },
+  chartGrid: {
     flexDirection: 'row',
-    alignItems: 'center',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.1,
-    shadowRadius: 3,
-    elevation: 2,
+    alignItems: 'flex-end',
+    justifyContent: 'space-around',
+    height: 160,
   },
-  summaryIcon: {
-    marginRight: 12,
+  barCol: { alignItems: 'center', width: 72 },
+  bar: { width: 36, borderRadius: 8 },
+  barHint: { fontSize: 12, color: '#374151', marginTop: 6 },
+  barLabel: { fontSize: 12, color: '#6B7280', marginTop: 2 },
+
+  // Progress
+  progressCaption: { fontSize: 12, color: '#6B7280', marginBottom: 8 },
+  progressBarOuter: {
+    height: 14,
+    borderRadius: 999,
+    backgroundColor: '#EEF2FF',
+    borderWidth: 1,
+    borderColor: '#E0E7FF',
+    overflow: 'hidden',
   },
-  summaryContent: {
-    flex: 1,
+  progressBarInner: {
+    height: '100%',
+    backgroundColor: '#1E3A8A',
+    borderRadius: 999,
   },
-  summaryTitle: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: '#1F2937',
-    marginBottom: 4,
-  },
-  summarySubtitle: {
-    fontSize: 14,
-    color: '#6B7280',
-  },
-  bottomNavigation: {
+  progressPct: { marginTop: 6, fontWeight: '700', color: '#1F2937' },
+
+  // Acesso rápido
+  quickActionsRow: {
     flexDirection: 'row',
     backgroundColor: '#FFFFFF',
-    paddingVertical: 12,
-    paddingHorizontal: 8,
-    borderTopWidth: 1,
-    borderTopColor: '#E5E7EB',
+    borderRadius: 12,
+    padding: 12,
+    borderWidth: 1, borderColor: '#F3F4F6',
+    justifyContent: 'space-around',
   },
-  navItem: {
-    flex: 1,
-    alignItems: 'center',
-    paddingVertical: 8,
-  },
-  activeNavItem: {
-    backgroundColor: 'rgba(30, 58, 138, 0.1)',
-    borderRadius: 8,
-  },
-  navText: {
-    fontSize: 12,
-    color: '#9CA3AF',
-    marginTop: 4,
-  },
-  activeNavText: {
-    color: '#1E3A8A',
-    fontWeight: '600',
-  },
+  quickAction: { alignItems: 'center', paddingVertical: 8, paddingHorizontal: 10 },
+  quickActionText: { marginTop: 6, fontSize: 12, color: '#1E3A8A', fontWeight: '700' },
 });
-
-export default HomeScreen;

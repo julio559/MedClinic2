@@ -14,45 +14,56 @@ import PatientDetailScreen from './src/screens/PatientDetailScreen';
 import PatientConditionsScreen from './src/screens/PatientConditionsScreen';
 import NewAnalysisScreen from './src/screens/NewAnalysisScreen';
 import AnalysisResultScreen from './src/screens/AnalysisResultScreen';
-import AnalysisWaitScreen from './src/screens/AnalysisWaitScreen'; // <-- ADICIONADO
+import AnalysisWaitScreen from './src/screens/AnalysisWaitScreen';
 import ProfileScreen from './src/screens/ProfileScreen';
 
 import { AuthProvider, useAuth } from './src/context/AuthContext';
-import './styles.css';
-// Reusa seu App padrão
-export { default } from './App';
+
 const Stack = createStackNavigator();
 const Tab = createBottomTabNavigator();
 
-// ajuste para seu backend
-const API_BASE = 'http://localhost:3001';
+const API_BASE = process.env.EXPO_PUBLIC_API_BASE || 'http://localhost:3001';
 
-const TabNavigator = () => {
-  return (
-    <Tab.Navigator
-      screenOptions={({ route }) => ({
-        tabBarIcon: ({ color, size }) => {
-          let iconName;
-          if (route.name === 'Home') iconName = 'home';
-          else if (route.name === 'History') iconName = 'history';
-          else if (route.name === 'Patients') iconName = 'people';
-          else if (route.name === 'Analysis') iconName = 'analytics';
-          else if (route.name === 'Profile') iconName = 'person';
-          return <Icon name={iconName} size={size} color={color} />;
-        },
-        tabBarActiveTintColor: '#1E3A8A',
-        tabBarInactiveTintColor: 'gray',
-        headerShown: false,
-      })}
-    >
-      <Tab.Screen name="Home" component={HomeScreen} options={{ title: 'Início' }} />
-      <Tab.Screen name="History" component={HistoryScreen} options={{ title: 'Histórico' }} />
-      <Tab.Screen name="Patients" component={PatientsScreen} options={{ title: 'Pacientes' }} />
-      <Tab.Screen name="Analysis" component={NewAnalysisScreen} options={{ title: 'Nova Análise' }} />
-      <Tab.Screen name="Profile" component={ProfileScreen} options={{ title: 'Perfil' }} />
-    </Tab.Navigator>
-  );
-};
+const TabNavigator = () => (
+  <Tab.Navigator
+    // mesma ordem de antes
+    initialRouteName="Home"
+    screenOptions={({ route }) => ({
+      // mesmos ícones de antes
+      tabBarIcon: ({ color, size }) => {
+        let iconName;
+        if (route.name === 'Home') iconName = 'home';
+        else if (route.name === 'History') iconName = 'history';
+        else if (route.name === 'Patients') iconName = 'people';
+        else if (route.name === 'Analysis') iconName = 'analytics';
+        else if (route.name === 'Profile') iconName = 'person';
+        return <Icon name={iconName} size={24} color={color} />;
+      },
+      // UX (estilo) aprimorado — sem mudar nomes/ícones/ordem
+      tabBarStyle: {
+        backgroundColor: '#F8FBFF',
+        borderTopColor: '#E5EAF5',
+        height: 72,
+        paddingTop: 6,
+        paddingBottom: 8,
+      },
+      tabBarLabelStyle: {
+        fontSize: 14,
+        fontWeight: '500',
+      },
+      tabBarActiveTintColor: '#111827',   // item ativo mais escuro
+      tabBarInactiveTintColor: '#3B4F8B', // inativos azul suave
+      headerShown: false,
+    })}
+  >
+    {/* mesmos nomes/títulos e mesma sequência */}
+    <Tab.Screen name="Home" component={HomeScreen} options={{ title: '' }} />
+    <Tab.Screen name="History" component={HistoryScreen} options={{ title: '' }} />
+    <Tab.Screen name="Patients" component={PatientsScreen} options={{ title: '' }} />
+    <Tab.Screen name="Analysis" component={NewAnalysisScreen} options={{ title: ' ' }} />
+    <Tab.Screen name="Profile" component={ProfileScreen} options={{ title: '' }} />
+  </Tab.Navigator>
+);
 
 const AppNavigator = () => {
   const { user, loading } = useAuth();
@@ -65,7 +76,7 @@ const AppNavigator = () => {
           <>
             <Stack.Screen name="Main" component={TabNavigator} />
 
-            {/* Fluxo de pacientes */}
+            {/* Pacientes */}
             <Stack.Screen name="PatientConditions" component={PatientConditionsScreen} />
             <Stack.Screen name="PatientDetail" component={PatientDetailScreen} />
 
@@ -75,7 +86,11 @@ const AppNavigator = () => {
             </Stack.Screen>
 
             {/* Resultados */}
-            <Stack.Screen name="AnalysisResult" component={AnalysisResultScreen} options={{ headerShown: true, title: 'Resultados' }} />
+            <Stack.Screen
+              name="AnalysisResult"
+              component={AnalysisResultScreen}
+              options={{ headerShown: true, title: 'Resultados' }}
+            />
           </>
         ) : (
           <>
