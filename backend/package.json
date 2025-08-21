@@ -1,27 +1,42 @@
 {
   "name": "medical-ai-backend",
   "version": "1.0.0",
-  "description": "Backend para aplicativo médico com IA",
+  "description": "Backend para aplicação médica com IA real usando OpenAI",
   "main": "src/server.js",
   "scripts": {
     "start": "node src/server.js",
-    "dev": "nodemon src/server.js"
+    "dev": "nodemon src/server.js",
+    "test": "jest",
+    "migrate": "npx sequelize-cli db:migrate",
+    "seed": "npx sequelize-cli db:seed:all"
   },
   "dependencies": {
     "express": "^4.18.2",
     "cors": "^2.8.5",
     "helmet": "^7.0.0",
+    "dotenv": "^16.3.1",
+    "sequelize": "^6.32.1",
+    "mysql2": "^3.6.0",
     "bcryptjs": "^2.4.3",
     "jsonwebtoken": "^9.0.2",
     "multer": "^1.4.5-lts.1",
-    "sequelize": "^6.32.1",
-    "mysql2": "^3.6.0",
-    "dotenv": "^16.3.1",
     "joi": "^17.9.2",
     "socket.io": "^4.7.2",
+    "openai": "^4.20.1",
     "uuid": "^9.0.0"
   },
   "devDependencies": {
-    "nodemon": "^3.0.1"
-  }
+    "nodemon": "^3.0.1",
+    "jest": "^29.6.2",
+    "sequelize-cli": "^6.6.1"
+  },
+  "keywords": [
+    "medical",
+    "ai",
+    "openai",
+    "healthcare",
+    "analysis"
+  ],
+  "author": "Medical AI Team",
+  "license": "MIT"
 }

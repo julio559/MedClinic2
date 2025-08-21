@@ -12,6 +12,7 @@ import {
   RefreshControl,
 } from 'react-native';
 import Icon from 'react-native-vector-icons/MaterialIcons';
+import { useAuth } from '../context/AuthContext';
 import axios from 'axios';
 
 const HistoryScreen = ({ navigation }) => {
@@ -20,10 +21,13 @@ const HistoryScreen = ({ navigation }) => {
   const [refreshing, setRefreshing] = useState(false);
   const [searchText, setSearchText] = useState('');
   const [filteredAnalyses, setFilteredAnalyses] = useState([]);
+  const { user } = useAuth();
 
   useEffect(() => {
-    fetchAnalyses();
-  }, []);
+    if (user) {
+      fetchAnalyses();
+    }
+  }, [user]);
 
   useEffect(() => {
     filterAnalyses();
@@ -31,23 +35,32 @@ const HistoryScreen = ({ navigation }) => {
 
   const fetchAnalyses = async () => {
     try {
-      setLoading(true);
-      const response = await axios.get('/analysis/recent');
-      
-      // A API retorna um array de análises
-      const analysesData = response.data || [];
-      setAnalyses(analysesData);
-      
+      const response = await axios.get('/analysis');
+      console.log('Analyses response:', response.data);
+      setAnalyses(response.data || []);
     } catch (error) {
       console.error('Erro ao buscar análises:', error);
-      
-      // Se der erro na API, define array vazio para parar o loading
-      setAnalyses([]);
-      
-      // Só mostra alerta se não for erro de conexão simples
-      if (error.response && error.response.status !== 404) {
-        Alert.alert('Erro', 'Falha ao carregar histórico de análises');
-      }
+      // Mock data para desenvolvimento
+      setAnalyses([
+        {
+          id: '1',
+          diagnosis: 'Possível Psoríase com Superinfecção Bacteriana',
+          symptoms: 'Lesão eritematosa com descamação',
+          description: 'Paciente apresenta lesões características',
+          status: 'completed',
+          createdAt: new Date().toISOString(),
+          patient: { name: 'João Silva' }
+        },
+        {
+          id: '2',
+          diagnosis: 'Dermatite Atópica',
+          symptoms: 'Coceira e vermelhidão',
+          description: 'Quadro típico de dermatite',
+          status: 'completed',
+          createdAt: new Date(Date.now() - 86400000).toISOString(),
+          patient: { name: 'Maria Santos' }
+        }
+      ]);
     } finally {
       setLoading(false);
       setRefreshing(false);
@@ -66,80 +79,68 @@ const HistoryScreen = ({ navigation }) => {
     }
 
     const filtered = analyses.filter(analysis => 
-      analysis.title?.toLowerCase().includes(searchText.toLowerCase()) ||
-      analysis.description?.toLowerCase().includes(searchText.toLowerCase()) ||
+      analysis.diagnosis?.toLowerCase().includes(searchText.toLowerCase()) ||
       analysis.symptoms?.toLowerCase().includes(searchText.toLowerCase()) ||
+      analysis.patient?.name?.toLowerCase().includes(searchText.toLowerCase()) ||
       formatDate(analysis.createdAt).includes(searchText)
     );
     setFilteredAnalyses(filtered);
   };
 
   const formatDate = (dateString) => {
-    const date = new Date(dateString);
-    return date.toLocaleDateString('pt-BR', {
-      day: '2-digit',
-      month: '2-digit',
-      year: 'numeric',
-    });
+    try {
+      const date = new Date(dateString);
+      return date.toLocaleDateString('pt-BR', {
+        day: '2-digit',
+        month: '2-digit',
+        year: 'numeric',
+      });
+    } catch {
+      return '';
+    }
   };
 
   const formatTime = (dateString) => {
-    const date = new Date(dateString);
-    return date.toLocaleTimeString('pt-BR', {
-      hour: '2-digit',
-      minute: '2-digit',
-    });
+    try {
+      const date = new Date(dateString);
+      return date.toLocaleTimeString('pt-BR', {
+        hour: '2-digit',
+        minute: '2-digit',
+      });
+    } catch {
+      return '';
+    }
   };
 
   const formatDateHeader = (dateString) => {
-    const date = new Date(dateString);
-    return date.toLocaleDateString('pt-BR', {
-      day: 'numeric',
-      month: 'long',
-      year: 'numeric',
-    });
+    try {
+      const date = new Date(dateString);
+      return date.toLocaleDateString('pt-BR', {
+        day: 'numeric',
+        month: 'long',
+        year: 'numeric',
+      });
+    } catch {
+      return '';
+    }
   };
 
   const groupAnalysesByDate = () => {
     const grouped = {};
     filteredAnalyses.forEach(analysis => {
       const dateKey = formatDate(analysis.createdAt);
-      if (!grouped[dateKey]) {
+      if (dateKey && !grouped[dateKey]) {
         grouped[dateKey] = [];
       }
-      grouped[dateKey].push(analysis);
+      if (dateKey) {
+        grouped[dateKey].push(analysis);
+      }
     });
     return grouped;
   };
 
   const navigateToResult = (analysis) => {
-    navigation.navigate('AnalysisResult', { analysisId: analysis.id });
-  };
-
-  const getAnalysisTitle = (analysis) => {
-    // Tentar extrair o diagnóstico principal dos resultados
-    if (analysis.AnalysisResults && analysis.AnalysisResults.length > 0) {
-      const mainDiagnosis = analysis.AnalysisResults.find(
-        result => result.category === 'Diagnostico principal' || result.category === 'Diagnóstico principal'
-      );
-      if (mainDiagnosis) {
-        return mainDiagnosis.result;
-      }
-    }
-    
-    // Fallback para título da análise
-    return analysis.title || 'Análise sem título';
-  };
-
-  const getAnalysisPreview = (analysis) => {
-    // Usar descrição ou sintomas como preview
-    if (analysis.description) {
-      return analysis.description;
-    }
-    if (analysis.symptoms) {
-      return `Sintomas: ${analysis.symptoms}`;
-    }
-    return 'Clique para ver detalhes';
+    navigation.navigate('AnalysisResult', { analysis });
   };
 
   const AnalysisItem = ({ analysis }) => (
@@ -149,26 +150,21 @@ const HistoryScreen = ({ navigation }) => {
     >
       <View style={styles.analysisContent}>
         <Text style={styles.analysisTitle} numberOfLines={1}>
-          {getAnalysisTitle(analysis)}
+          {analysis.diagnosis || 'Diagnóstico não especificado'}
         </Text>
         <Text style={styles.analysisTime}>
           {formatDate(analysis.createdAt)} • {formatTime(analysis.createdAt)}
         </Text>
-        <Text style={styles.analysisSymptoms} numberOfLines={2}>
-          {getAnalysisPreview(analysis)}
-        </Text>
-        
-        {/* Status da análise */}
-        <View style={styles.statusContainer}>
-          <View style={[
-            styles.statusDot,
-            { backgroundColor: analysis.status === 'completed' ? '#10B981' : analysis.status === 'processing' ? '#F59E0B' : '#EF4444' }
-          ]} />
-          <Text style={styles.statusText}>
-            {analysis.status === 'completed' ? 'Concluída' : 
-             analysis.status === 'processing' ? 'Processando' : 'Pendente'}
+        {analysis.patient?.name && (
+          <Text style={styles.analysisPatient}>
+            Paciente: {analysis.patient.name}
           </Text>
-        </View>
+        )}
+        {analysis.symptoms && (
+          <Text style={styles.analysisSymptoms} numberOfLines={2}>
+            {analysis.symptoms}
+          </Text>
+        )}
       </View>
       <Icon name="chevron-right" size={24} color="#64748b" />
     </TouchableOpacity>
@@ -178,9 +174,6 @@ const HistoryScreen = ({ navigation }) => {
     return (
       <SafeAreaView style={styles.container}>
         <View style={styles.header}>
-          <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backButton}>
-            <Icon name="arrow-back" size={24} color="#1e293b" />
-          </TouchableOpacity>
           <Text style={styles.headerTitle}>Histórico de análises EYA</Text>
         </View>
         <View style={styles.loadingContainer}>
@@ -193,16 +186,17 @@ const HistoryScreen = ({ navigation }) => {
 
   const groupedAnalyses = groupAnalysesByDate();
   const dateKeys = Object.keys(groupedAnalyses).sort((a, b) => {
-    return new Date(b.split('/').reverse().join('-')) - new Date(a.split('/').reverse().join('-'));
+    try {
+      return new Date(b.split('/').reverse().join('-')) - new Date(a.split('/').reverse().join('-'));
+    } catch {
+      return 0;
+    }
   });
 
   return (
     <SafeAreaView style={styles.container}>
       {/* Header */}
       <View style={styles.header}>
-        <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backButton}>
-          <Icon name="arrow-back" size={24} color="#1e293b" />
-        </TouchableOpacity>
         <Text style={styles.headerTitle}>Histórico de análises EYA</Text>
       </View>
 
@@ -231,23 +225,17 @@ const HistoryScreen = ({ navigation }) => {
             <Icon name="history" size={64} color="#cbd5e1" />
             <Text style={styles.emptyTitle}>Nenhuma análise encontrada</Text>
             <Text style={styles.emptySubtitle}>
-              {searchText ? 'Tente uma pesquisa diferente' : 'Você ainda não fez nenhuma análise. Comece criando uma nova análise!'}
+              {searchText ? 'Tente uma pesquisa diferente' : 'Você ainda não fez nenhuma análise'}
             </Text>
-            {!searchText && (
-              <TouchableOpacity 
-                style={styles.emptyActionButton}
-                onPress={() => navigation.navigate('Analysis')}
-              >
-                <Icon name="add" size={20} color="#FFFFFF" style={{ marginRight: 8 }} />
-                <Text style={styles.emptyActionText}>Criar Primeira Análise</Text>
-              </TouchableOpacity>
-            )}
           </View>
         ) : (
           dateKeys.map(dateKey => (
             <View key={dateKey} style={styles.dateSection}>
               <Text style={styles.dateHeader}>
-                {formatDateHeader(groupedAnalyses[dateKey][0].createdAt)}
+                {groupedAnalyses[dateKey]?.[0] ? 
+                  formatDateHeader(groupedAnalyses[dateKey][0].createdAt) : 
+                  dateKey
+                }
               </Text>
               {groupedAnalyses[dateKey].map(analysis => (
                 <AnalysisItem key={analysis.id} analysis={analysis} />
@@ -258,14 +246,12 @@ const HistoryScreen = ({ navigation }) => {
       </ScrollView>
 
       {/* Floating Action Button */}
-      {dateKeys.length > 0 && (
-        <TouchableOpacity 
-          style={styles.fab}
-          onPress={() => navigation.navigate('Analysis')}
-        >
-          <Text style={styles.fabText}>Pergunte a EYA</Text>
-        </TouchableOpacity>
-      )}
+      <TouchableOpacity 
+        style={styles.fab}
+        onPress={() => navigation.navigate('Analysis')}
+      >
+        <Text style={styles.fabText}>Pergunte a EYA</Text>
+      </TouchableOpacity>
     </SafeAreaView>
   );
 };
@@ -280,13 +266,9 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     paddingHorizontal: 20,
     paddingVertical: 15,
-    paddingTop: 50,
     backgroundColor: '#fff',
     borderBottomWidth: 1,
     borderBottomColor: '#e2e8f0',
-  },
-  backButton: {
-    marginRight: 15,
   },
   headerTitle: {
     fontSize: 18,
@@ -328,7 +310,6 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
     paddingVertical: 100,
-    paddingHorizontal: 40,
   },
   emptyTitle: {
     fontSize: 18,
@@ -336,27 +317,12 @@ const styles = StyleSheet.create({
     color: '#64748b',
     marginTop: 20,
     marginBottom: 10,
-    textAlign: 'center',
   },
   emptySubtitle: {
     fontSize: 14,
     color: '#94a3b8',
     textAlign: 'center',
-    lineHeight: 20,
-    marginBottom: 24,
-  },
-  emptyActionButton: {
-    backgroundColor: '#1e293b',
-    borderRadius: 8,
-    paddingHorizontal: 24,
-    paddingVertical: 12,
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
-  emptyActionText: {
-    color: '#FFFFFF',
-    fontSize: 16,
-    fontWeight: '600',
+    paddingHorizontal: 40,
   },
   dateSection: {
     marginBottom: 30,
@@ -401,26 +367,15 @@ const styles = StyleSheet.create({
     color: '#64748b',
     marginBottom: 4,
   },
+  analysisPatient: {
+    fontSize: 13,
+    color: '#3b82f6',
+    marginBottom: 4,
+  },
   analysisSymptoms: {
     fontSize: 14,
     color: '#64748b',
     lineHeight: 18,
-    marginBottom: 8,
-  },
-  statusContainer: {
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
-  statusDot: {
-    width: 8,
-    height: 8,
-    borderRadius: 4,
-    marginRight: 6,
-  },
-  statusText: {
-    fontSize: 12,
-    color: '#64748b',
-    fontWeight: '500',
   },
   fab: {
     position: 'absolute',

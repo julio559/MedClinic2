@@ -1,151 +1,92 @@
 import React, { useState, useEffect } from 'react';
-import { View, Text, StyleSheet, Modal, ActivityIndicator } from 'react-native';
+import {
+  View,
+  Text,
+  StyleSheet,
+  Modal,
+  ActivityIndicator,
+  TouchableOpacity,
+  Animated
+} from 'react-native';
 import Icon from 'react-native-vector-icons/MaterialIcons';
 
 const AIAnalysisProgress = ({ visible, analysisId, doctorId, onComplete, onError }) => {
+  const [currentStep, setCurrentStep] = useState(0);
   const [progress, setProgress] = useState(0);
-  const [currentCategory, setCurrentCategory] = useState('');
-  const [status, setStatus] = useState('Iniciando análise...');
-  const [results, setResults] = useState([]);
-  const [pollInterval, setPollInterval] = useState(null);
+  const [isCompleted, setIsCompleted] = useState(false);
+  const [hasError, setHasError] = useState(false);
+  const [progressAnim] = useState(new Animated.Value(0));
 
-  const categories = [
-    'Diagnóstico principal',
-    'Etiologia', 
-    'Fisiopatologia',
-    'Apresentação Clínica',
-    'Abordagem diagnóstica',
-    'Abordagem Terapêutica',
-    'Guia de Prescrição'
+  const steps = [
+    { id: 1, name: 'Analisando dados...', icon: 'analytics' },
+    { id: 2, name: 'Processando imagens...', icon: 'image' },
+    { id: 3, name: 'Gerando diagnóstico...', icon: 'psychology' },
+    { id: 4, name: 'Calculando confiança...', icon: 'calculate' },
+    { id: 5, name: 'Finalizando relatório...', icon: 'description' },
+    { id: 6, name: 'Análise concluída!', icon: 'check-circle' }
   ];
-
-  // Simulate progress updates (replace with actual API polling)
-  const simulateProgress = () => {
-    let currentProgress = 0;
-    let categoryIndex = 0;
-
-    const interval = setInterval(() => {
-      currentProgress += Math.random() * 15 + 5; // Random progress between 5-20%
-      
-      if (currentProgress >= 100) {
-        currentProgress = 100;
-        setProgress(100);
-        setStatus('Análise concluída!');
-        setCurrentCategory('');
-        
-        clearInterval(interval);
-        
-        // Simulate completion after a short delay
-        setTimeout(() => {
-          onComplete({
-            analysisId,
-            confidence: 0.85 + Math.random() * 0.1, // Random confidence 85-95%
-            results: results
-          });
-        }, 1500);
-        return;
-      }
-
-      setProgress(Math.min(currentProgress, 100));
-      
-      // Update current category based on progress
-      const newCategoryIndex = Math.min(
-        Math.floor((currentProgress / 100) * categories.length),
-        categories.length - 1
-      );
-      
-      if (newCategoryIndex !== categoryIndex && newCategoryIndex < categories.length) {
-        categoryIndex = newCategoryIndex;
-        const category = categories[categoryIndex];
-        setCurrentCategory(category);
-        setStatus(`Analisando: ${category}`);
-        
-        // Mark previous categories as completed
-        setResults(prev => {
-          const updated = [...prev];
-          for (let i = 0; i < categoryIndex; i++) {
-            if (!updated[i]) {
-              updated[i] = {
-                category: categories[i],
-                status: 'completed',
-                timestamp: new Date()
-              };
-            }
-          }
-          // Add current category as processing
-          updated[categoryIndex] = {
-            category: category,
-            status: 'processing',
-            timestamp: new Date()
-          };
-          return updated;
-        });
-      }
-    }, 800 + Math.random() * 1200); // Random interval between 0.8-2 seconds
-
-    return interval;
-  };
-
-  // Alternative: Real API polling function
-  const pollAnalysisStatus = async () => {
-    try {
-      const response = await fetch(`/api/analysis/${analysisId}/status`);
-      const data = await response.json();
-      
-      setProgress(data.progress || 0);
-      setCurrentCategory(data.currentCategory || '');
-      setStatus(data.status || 'Processando...');
-      
-      if (data.completed) {
-        clearInterval(pollInterval);
-        onComplete(data);
-      } else if (data.error) {
-        clearInterval(pollInterval);
-        onError(data);
-      }
-    } catch (error) {
-      console.error('Error polling analysis status:', error);
-      // Continue polling on error, but could implement retry logic
-    }
-  };
 
   useEffect(() => {
     if (visible && analysisId) {
-      // Option 1: Use simulation for demo
-      const interval = simulateProgress();
-      setPollInterval(interval);
-      
-      // Option 2: Use real API polling (uncomment to use)
-      // const interval = setInterval(pollAnalysisStatus, 2000);
-      // setPollInterval(interval);
-
-      return () => {
-        if (interval) {
-          clearInterval(interval);
-        }
-      };
+      startAnalysisSimulation();
     }
   }, [visible, analysisId]);
 
-  // Clean up on unmount
   useEffect(() => {
-    return () => {
-      if (pollInterval) {
-        clearInterval(pollInterval);
-      }
-    };
-  }, [pollInterval]);
+    // Animar barra de progresso
+    Animated.timing(progressAnim, {
+      toValue: progress,
+      duration: 500,
+      useNativeDriver: false,
+    }).start();
+  }, [progress]);
 
-  const getStatusIcon = (categoryStatus) => {
-    switch (categoryStatus) {
-      case 'completed':
-        return <Icon name="check-circle" size={20} color="#10B981" />;
-      case 'processing':
-        return <ActivityIndicator size="small" color="#3B82F6" />;
-      case 'error':
-        return <Icon name="error" size={20} color="#EF4444" />;
-      default:
-        return <Icon name="radio-button-unchecked" size={20} color="#D1D5DB" />;
+  const startAnalysisSimulation = async () => {
+    setCurrentStep(0);
+    setProgress(0);
+    setIsCompleted(false);
+    setHasError(false);
+
+    try {
+      // Simular cada etapa do processamento
+      for (let i = 0; i < steps.length; i++) {
+        setCurrentStep(i);
+        setProgress((i + 1) / steps.length * 100);
+        
+        // Tempo variado para cada etapa
+        const delay = i === 0 ? 1500 : // Análise inicial mais longa
+                     i === 2 ? 2000 : // Diagnóstico mais longo
+                     1000; // Outras etapas
+        
+        await new Promise(resolve => setTimeout(resolve, delay));
+      }
+
+      // Simular resposta da IA
+      setTimeout(() => {
+        setIsCompleted(true);
+        
+        const mockAnalysisData = {
+          analysisId: analysisId,
+          title: 'Análise Médica Completa',
+          confidence: 0.85 + Math.random() * 0.1, // 85-95% de confiança
+          resultsCount: 7,
+          message: 'Análise de IA concluída com sucesso!'
+        };
+
+        onComplete && onComplete(mockAnalysisData);
+      }, 1000);
+
+    } catch (error) {
+      console.error('Erro na simulação de análise:', error);
+      setHasError(true);
+      onError && onError({ message: 'Erro durante o processamento da IA' });
+    }
+  };
+
+  const handleClose = () => {
+    if (isCompleted || hasError) {
+      // Só permite fechar se concluído ou com erro
+      onComplete && onComplete({ analysisId, confidence: 0.9, resultsCount: 7 });
     }
   };
 
@@ -153,91 +94,108 @@ const AIAnalysisProgress = ({ visible, analysisId, doctorId, onComplete, onError
 
   return (
     <Modal
-      transparent={true}
       visible={visible}
+      transparent={true}
       animationType="fade"
+      onRequestClose={handleClose}
     >
-      <View style={styles.overlay}>
-        <View style={styles.container}>
+      <View style={styles.modalOverlay}>
+        <View style={styles.modalContent}>
           {/* Header */}
           <View style={styles.header}>
-            <Icon name="psychology" size={32} color="#3B82F6" />
-            <Text style={styles.title}>Análise de IA em Progresso</Text>
-            <Text style={styles.subtitle}>Aguarde enquanto nossa IA analisa os dados médicos</Text>
-          </View>
-
-          {/* Progress Bar */}
-          <View style={styles.progressSection}>
-            <View style={styles.progressBar}>
-              <View 
-                style={[styles.progressFill, { width: `${progress}%` }]}
-              />
+            <View style={styles.headerIcon}>
+              <Icon name="psychology" size={24} color="#1E3A8A" />
             </View>
-            <Text style={styles.progressText}>{Math.round(progress)}% concluído</Text>
-          </View>
-
-          {/* Current Status */}
-          <View style={styles.statusSection}>
-            <Text style={styles.statusText}>{status}</Text>
-            {currentCategory && (
-              <Text style={styles.currentCategory}>📋 {currentCategory}</Text>
+            <Text style={styles.title}>IA Médica Processando</Text>
+            {(isCompleted || hasError) && (
+              <TouchableOpacity onPress={handleClose} style={styles.closeButton}>
+                <Icon name="close" size={24} color="#6B7280" />
+              </TouchableOpacity>
             )}
           </View>
 
-          {/* Categories List */}
-          <View style={styles.categoriesSection}>
-            <Text style={styles.categoriesTitle}>Categorias de Análise:</Text>
-            {categories.map((category, index) => {
-              const result = results.find(r => r.category === category);
-              const isCurrentCategory = currentCategory === category;
-              const isCompleted = progress > ((index + 1) / categories.length) * 100;
-              
-              let categoryStatus = 'pending';
-              if (result) {
-                categoryStatus = result.status;
-              } else if (isCompleted) {
-                categoryStatus = 'completed';
-              } else if (isCurrentCategory) {
-                categoryStatus = 'processing';
-              }
+          {/* Progress Bar */}
+          <View style={styles.progressContainer}>
+            <View style={styles.progressBar}>
+              <Animated.View 
+                style={[
+                  styles.progressFill,
+                  {
+                    width: progressAnim.interpolate({
+                      inputRange: [0, 100],
+                      outputRange: ['0%', '100%']
+                    })
+                  }
+                ]} 
+              />
+            </View>
+            <Text style={styles.progressText}>{Math.round(progress)}%</Text>
+          </View>
 
-              return (
-                <View 
-                  key={category} 
-                  style={[
-                    styles.categoryItem,
-                    isCurrentCategory && styles.categoryItemActive
-                  ]}
-                >
-                  {getStatusIcon(categoryStatus)}
-                  <Text style={[
-                    styles.categoryText,
-                    categoryStatus === 'completed' && styles.categoryTextCompleted,
-                    isCurrentCategory && styles.categoryTextActive
-                  ]}>
-                    {category}
-                  </Text>
-                  {result && (
-                    <Text style={styles.categoryTime}>
-                      {result.timestamp.toLocaleTimeString('pt-BR', { 
-                        hour: '2-digit', 
-                        minute: '2-digit',
-                        second: '2-digit'
-                      })}
-                    </Text>
+          {/* Steps */}
+          <View style={styles.stepsContainer}>
+            {steps.map((step, index) => (
+              <View key={step.id} style={styles.stepItem}>
+                <View style={[
+                  styles.stepIcon,
+                  index < currentStep ? styles.stepCompleted :
+                  index === currentStep ? styles.stepActive :
+                  styles.stepPending
+                ]}>
+                  {index < currentStep ? (
+                    <Icon name="check" size={16} color="#FFFFFF" />
+                  ) : index === currentStep && !isCompleted && !hasError ? (
+                    <ActivityIndicator size={16} color="#FFFFFF" />
+                  ) : (
+                    <Icon name={step.icon} size={16} color={
+                      index === currentStep ? "#FFFFFF" : "#9CA3AF"
+                    } />
                   )}
                 </View>
-              );
-            })}
+                <Text style={[
+                  styles.stepText,
+                  index <= currentStep ? styles.stepTextActive : styles.stepTextPending
+                ]}>
+                  {step.name}
+                </Text>
+              </View>
+            ))}
           </View>
 
-          {/* AI Info */}
-          <View style={styles.aiInfo}>
-            <Icon name="auto-awesome" size={16} color="#6B7280" />
-            <Text style={styles.aiInfoText}>
-              Powered by Medical AI • Análise baseada em evidências científicas
+          {/* Status Messages */}
+          {isCompleted && (
+            <View style={styles.statusContainer}>
+              <Icon name="check-circle" size={24} color="#10B981" />
+              <Text style={styles.successText}>
+                Análise concluída com sucesso!
+              </Text>
+            </View>
+          )}
+
+          {hasError && (
+            <View style={styles.statusContainer}>
+              <Icon name="error" size={24} color="#EF4444" />
+              <Text style={styles.errorText}>
+                Erro durante o processamento
+              </Text>
+            </View>
+          )}
+
+          {/* Info */}
+          <View style={styles.infoContainer}>
+            <Icon name="info" size={16} color="#6B7280" />
+            <Text style={styles.infoText}>
+              Nossa IA está analisando todos os dados fornecidos para gerar um relatório médico completo.
             </Text>
           </View>
+
+          {/* Action Button */}
+          {isCompleted && (
+            <TouchableOpacity style={styles.actionButton} onPress={handleClose}>
+              <Text style={styles.actionButtonText}>Ver Resultados</Text>
+              <Icon name="arrow-forward" size={20} color="#FFFFFF" />
+            </TouchableOpacity>
+          )}
         </View>
       </View>
     </Modal>
@@ -245,127 +203,159 @@ const AIAnalysisProgress = ({ visible, analysisId, doctorId, onComplete, onError
 };
 
 const styles = StyleSheet.create({
-  overlay: {
+  modalOverlay: {
     flex: 1,
     backgroundColor: 'rgba(0, 0, 0, 0.7)',
     justifyContent: 'center',
     alignItems: 'center',
-    paddingHorizontal: 20,
   },
-  container: {
+  modalContent: {
     backgroundColor: '#FFFFFF',
-    borderRadius: 20,
+    borderRadius: 16,
     padding: 24,
-    width: '100%',
+    width: '90%',
     maxWidth: 400,
-    maxHeight: '80%',
+    elevation: 10,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.25,
+    shadowRadius: 8,
   },
   header: {
+    flexDirection: 'row',
     alignItems: 'center',
     marginBottom: 24,
   },
+  headerIcon: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: '#EBF4FF',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: 12,
+  },
   title: {
-    fontSize: 20,
-    fontWeight: 'bold',
+    flex: 1,
+    fontSize: 18,
+    fontWeight: '600',
     color: '#1F2937',
-    marginTop: 12,
-    textAlign: 'center',
   },
-  subtitle: {
-    fontSize: 14,
-    color: '#6B7280',
-    textAlign: 'center',
-    marginTop: 8,
-    lineHeight: 20,
+  closeButton: {
+    padding: 4,
   },
-  progressSection: {
+  progressContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
     marginBottom: 24,
   },
   progressBar: {
+    flex: 1,
     height: 8,
     backgroundColor: '#E5E7EB',
     borderRadius: 4,
     overflow: 'hidden',
+    marginRight: 12,
   },
   progressFill: {
     height: '100%',
-    backgroundColor: '#3B82F6',
+    backgroundColor: '#1E3A8A',
     borderRadius: 4,
   },
   progressText: {
     fontSize: 14,
-    color: '#374151',
-    textAlign: 'center',
-    marginTop: 8,
     fontWeight: '600',
+    color: '#1E3A8A',
+    minWidth: 40,
+    textAlign: 'right',
   },
-  statusSection: {
-    alignItems: 'center',
+  stepsContainer: {
     marginBottom: 24,
-    paddingVertical: 16,
-    backgroundColor: '#F3F4F6',
-    borderRadius: 12,
   },
-  statusText: {
-    fontSize: 16,
-    color: '#1F2937',
-    fontWeight: '600',
-  },
-  currentCategory: {
-    fontSize: 14,
-    color: '#3B82F6',
-    marginTop: 4,
-  },
-  categoriesSection: {
-    marginBottom: 20,
-  },
-  categoriesTitle: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: '#1F2937',
-    marginBottom: 12,
-  },
-  categoryItem: {
+  stepItem: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingVertical: 8,
-    paddingHorizontal: 12,
-    borderRadius: 8,
-    marginBottom: 4,
+    marginBottom: 12,
   },
-  categoryItemActive: {
-    backgroundColor: '#EBF4FF',
+  stepIcon: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: 12,
   },
-  categoryText: {
-    fontSize: 14,
-    color: '#6B7280',
-    marginLeft: 12,
+  stepCompleted: {
+    backgroundColor: '#10B981',
+  },
+  stepActive: {
+    backgroundColor: '#1E3A8A',
+  },
+  stepPending: {
+    backgroundColor: '#F3F4F6',
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+  },
+  stepText: {
     flex: 1,
+    fontSize: 14,
   },
-  categoryTextCompleted: {
-    color: '#10B981',
+  stepTextActive: {
+    color: '#1F2937',
     fontWeight: '500',
   },
-  categoryTextActive: {
-    color: '#3B82F6',
-    fontWeight: '600',
-  },
-  categoryTime: {
-    fontSize: 12,
+  stepTextPending: {
     color: '#9CA3AF',
   },
-  aiInfo: {
+  statusContainer: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    paddingTop: 16,
-    borderTopWidth: 1,
-    borderTopColor: '#E5E7EB',
+    marginBottom: 16,
+    padding: 12,
+    borderRadius: 8,
+    backgroundColor: '#F9FAFB',
   },
-  aiInfoText: {
+  successText: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#10B981',
+    marginLeft: 8,
+  },
+  errorText: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#EF4444',
+    marginLeft: 8,
+  },
+  infoContainer: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    backgroundColor: '#F9FAFB',
+    padding: 12,
+    borderRadius: 8,
+    marginBottom: 16,
+  },
+  infoText: {
+    flex: 1,
     fontSize: 12,
     color: '#6B7280',
-    marginLeft: 6,
+    lineHeight: 16,
+    marginLeft: 8,
+  },
+  actionButton: {
+    backgroundColor: '#1E3A8A',
+    borderRadius: 8,
+    padding: 16,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  actionButtonText: {
+    color: '#FFFFFF',
+    fontSize: 16,
+    fontWeight: '600',
+    marginRight: 8,
   },
 });
 

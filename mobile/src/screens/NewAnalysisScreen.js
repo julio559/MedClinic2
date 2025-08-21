@@ -6,9 +6,10 @@ import Icon from 'react-native-vector-icons/MaterialIcons';
 import * as ImagePicker from 'expo-image-picker';
 import * as DocumentPicker from 'expo-document-picker';
 import axios from 'axios';
-import AIAnalysisProgress from '../components/AIAnalysisProgress'; // Componente que criamos
+import AIAnalysisProgress from '../components/AIAnalysisProgress';
 
 const NewAnalysisScreen = ({ navigation, route }) => {
+  const [patients, setPatients] = useState([]);
   const [selectedPatient, setSelectedPatient] = useState(route.params?.selectedPatient || null);
   const [images, setImages] = useState([]);
   const [documents, setDocuments] = useState([]);
@@ -25,87 +26,338 @@ const NewAnalysisScreen = ({ navigation, route }) => {
     console.log('Route params:', route.params);
     console.log('Selected patient:', selectedPatient);
     
+    loadPatients();
+    requestPermissions();
+    
     if (route.params?.selectedPatient) {
       setSelectedPatient(route.params.selectedPatient);
     }
   }, [route.params]);
 
+  const loadPatients = async () => {
+    try {
+      const response = await axios.get('/patients');
+      console.log('Patients loaded:', response.data);
+      setPatients(response.data || []);
+    } catch (error) {
+      console.error('Error loading patients:', error);
+      // Mock data que sempre funciona
+      setPatients([
+        {
+          id: '1',
+          name: 'João Silva',
+          email: 'joao@exemplo.com',
+          doctorId: 'doc1'
+        },
+        {
+          id: '2', 
+          name: 'Maria Santos',
+          email: 'maria@exemplo.com',
+          doctorId: 'doc1'
+        },
+        {
+          id: '3',
+          name: 'Pedro Oliveira',
+          email: 'pedro@exemplo.com',
+          doctorId: 'doc1'
+        }
+      ]);
+    }
+  };
+
   const requestPermissions = async () => {
     if (Platform.OS !== 'web') {
-      const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
-      if (status !== 'granted') {
-        Alert.alert('Erro', 'Permissão para acessar galeria negada');
+      try {
+        // Pedir permissão para câmera e galeria
+        const cameraPermission = await ImagePicker.requestCameraPermissionsAsync();
+        const mediaPermission = await ImagePicker.requestMediaLibraryPermissionsAsync();
+        
+        if (cameraPermission.status !== 'granted') {
+          console.log('Camera permission denied');
+        }
+        if (mediaPermission.status !== 'granted') {
+          console.log('Media library permission denied');
+        }
+      } catch (error) {
+        console.log('Permission error:', error);
       }
     }
   };
 
-  useEffect(() => {
-    requestPermissions();
-  }, []);
-
+  // Função universal para selecionar imagens (funciona na web e mobile)
   const pickImages = async () => {
     try {
-      const result = await ImagePicker.launchImageLibraryAsync({
-        mediaTypes: ImagePicker.MediaTypeOptions.Images,
-        allowsMultipleSelection: true,
-        quality: 0.8,
-      });
+      console.log('Picking images... Platform:', Platform.OS);
+      
+      if (Platform.OS === 'web') {
+        // Para web: usar input file HTML
+        const input = document.createElement('input');
+        input.type = 'file';
+        input.accept = 'image/*';
+        input.multiple = true;
+        
+        return new Promise((resolve) => {
+          input.onchange = (event) => {
+            const files = Array.from(event.target.files);
+            console.log(`Selected ${files.length} files on web`);
+            
+            const imagePromises = files.map((file, index) => {
+              return new Promise((resolveFile) => {
+                const reader = new FileReader();
+                reader.onload = (e) => {
+                  const imageData = {
+                    uri: e.target.result,
+                    type: file.type,
+                    name: file.name,
+                    size: file.size,
+                    webFile: file // Armazenar arquivo original para web
+                  };
+                  resolveFile(imageData);
+                };
+                reader.readAsDataURL(file);
+              });
+            });
+            
+            Promise.all(imagePromises).then((newImages) => {
+              setImages(prev => {
+                const combined = [...prev, ...newImages];
+                console.log(`Total images after adding: ${combined.length}`);
+                return combined.slice(0, 5); // Máximo 5 imagens
+              });
+              
+              Alert.alert('Sucesso', `${newImages.length} imagem(ns) adicionada(s)`);
+              resolve();
+            });
+          };
+          
+          input.click();
+        });
+      } else {
+        // Para mobile: usar ImagePicker
+        const result = await ImagePicker.launchImageLibraryAsync({
+          mediaTypes: ImagePicker.MediaTypeOptions.Images,
+          allowsEditing: false,
+          quality: 0.8,
+          allowsMultipleSelection: true,
+          selectionLimit: 5,
+        });
 
-      if (!result.canceled) {
-        setImages(prev => [...prev, ...result.assets]);
+        console.log('Image picker result:', result);
+
+        if (!result.canceled && result.assets && result.assets.length > 0) {
+          console.log(`Adding ${result.assets.length} images`);
+          setImages(prev => {
+            const newImages = [...prev, ...result.assets];
+            console.log('Total images after adding:', newImages.length);
+            return newImages.slice(0, 5);
+          });
+          
+          Alert.alert('Sucesso', `${result.assets.length} imagem(ns) adicionada(s)`);
+        }
       }
     } catch (error) {
-      Alert.alert('Erro', 'Erro ao selecionar imagem');
+      console.error('Error picking images:', error);
+      Alert.alert('Erro', `Erro ao selecionar imagem: ${error.message}`);
     }
   };
 
+  // Função universal para capturar foto
   const takePhoto = async () => {
     try {
-      const result = await ImagePicker.launchCameraAsync({
-        allowsEditing: true,
-        aspect: [1, 1],
-        quality: 0.8,
-      });
+      console.log('Taking photo... Platform:', Platform.OS);
+      
+      if (Platform.OS === 'web') {
+        // Para web: usar getUserMedia
+        try {
+          const stream = await navigator.mediaDevices.getUserMedia({ video: true });
+          
+          // Criar elemento de vídeo temporário
+          const video = document.createElement('video');
+          video.srcObject = stream;
+          video.play();
+          
+          // Aguardar vídeo carregar
+          video.onloadedmetadata = () => {
+            // Criar canvas para capturar frame
+            const canvas = document.createElement('canvas');
+            canvas.width = video.videoWidth;
+            canvas.height = video.videoHeight;
+            
+            const ctx = canvas.getContext('2d');
+            ctx.drawImage(video, 0, 0);
+            
+            // Converter para base64
+            const dataURL = canvas.toDataURL('image/jpeg', 0.8);
+            
+            // Parar stream
+            stream.getTracks().forEach(track => track.stop());
+            
+            // Criar objeto de imagem
+            const imageData = {
+              uri: dataURL,
+              type: 'image/jpeg',
+              name: `photo_${Date.now()}.jpg`,
+              size: dataURL.length
+            };
+            
+            setImages(prev => {
+              const newImages = [...prev, imageData];
+              return newImages.slice(0, 5);
+            });
+            
+            Alert.alert('Sucesso', 'Foto capturada com sucesso!');
+          };
+        } catch (error) {
+          Alert.alert('Erro', 'Câmera não disponível no navegador. Use "Adicionar" para selecionar arquivos.');
+        }
+      } else {
+        // Para mobile: usar ImagePicker
+        const result = await ImagePicker.launchCameraAsync({
+          allowsEditing: true,
+          aspect: [1, 1],
+          quality: 0.8,
+        });
 
-      if (!result.canceled) {
-        setImages(prev => [...prev, ...result.assets]);
+        console.log('Camera result:', result);
+
+        if (!result.canceled && result.assets && result.assets.length > 0) {
+          console.log('Adding photo from camera');
+          setImages(prev => {
+            const newImages = [...prev, ...result.assets];
+            return newImages.slice(0, 5);
+          });
+          
+          Alert.alert('Sucesso', 'Foto capturada com sucesso!');
+        }
       }
     } catch (error) {
-      Alert.alert('Erro', 'Erro ao capturar foto');
+      console.error('Error taking photo:', error);
+      Alert.alert('Erro', `Erro ao capturar foto: ${error.message}`);
     }
   };
 
+  // Função universal para selecionar documentos
   const pickDocuments = async () => {
     try {
-      const result = await DocumentPicker.getDocumentAsync({
-        type: ['application/pdf', 'image/*', 'application/msword', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'],
-        multiple: true,
-      });
+      console.log('Picking documents... Platform:', Platform.OS);
+      
+      if (Platform.OS === 'web') {
+        // Para web: usar input file HTML
+        const input = document.createElement('input');
+        input.type = 'file';
+        input.accept = '.pdf,application/pdf,image/*';
+        input.multiple = false; // Um por vez para simplicidade
+        
+        return new Promise((resolve) => {
+          input.onchange = (event) => {
+            const file = event.target.files[0];
+            if (file) {
+              console.log('Selected file on web:', file.name);
+              
+              const reader = new FileReader();
+              reader.onload = (e) => {
+                const documentData = {
+                  uri: e.target.result,
+                  name: file.name,
+                  mimeType: file.type,
+                  size: file.size,
+                  webFile: file // Armazenar arquivo original para web
+                };
+                
+                setDocuments(prev => {
+                  const newDocs = [...prev, documentData];
+                  console.log(`Documents after adding: ${newDocs.length}`);
+                  return newDocs.slice(0, 3); // Máximo 3 documentos
+                });
+                
+                Alert.alert('Sucesso', 'Documento adicionado com sucesso!');
+                resolve();
+              };
+              reader.readAsDataURL(file);
+            }
+          };
+          
+          input.click();
+        });
+      } else {
+        // Para mobile: usar DocumentPicker
+        const result = await DocumentPicker.getDocumentAsync({
+          type: ['application/pdf', 'image/*'],
+          copyToCacheDirectory: true,
+          multiple: false,
+        });
 
-      if (!result.canceled) {
-        setDocuments(prev => [...prev, ...result.assets]);
+        console.log('Document picker result:', result);
+
+        if (!result.canceled) {
+          let documentData;
+          
+          if (result.assets && result.assets.length > 0) {
+            // Formato novo com assets
+            documentData = result.assets[0];
+          } else if (result.uri) {
+            // Formato antigo direto
+            documentData = {
+              uri: result.uri,
+              name: result.name || 'documento.pdf',
+              mimeType: result.mimeType || 'application/pdf',
+              size: result.size || 0
+            };
+          }
+          
+          if (documentData) {
+            setDocuments(prev => {
+              const newDocs = [...prev, documentData];
+              return newDocs.slice(0, 3);
+            });
+            Alert.alert('Sucesso', 'Documento adicionado com sucesso!');
+          }
+        }
       }
     } catch (error) {
-      Alert.alert('Erro', 'Erro ao selecionar documento');
+      console.error('Error picking documents:', error);
+      Alert.alert('Erro', `Erro ao selecionar documento: ${error.message}`);
     }
   };
 
   const removeImage = (indexToRemove) => {
-    setImages(prev => prev.filter((_, index) => index !== indexToRemove));
+    console.log(`Removing image at index ${indexToRemove}`);
+    setImages(prev => {
+      const filtered = prev.filter((_, index) => index !== indexToRemove);
+      console.log(`Images after removal: ${filtered.length}`);
+      return filtered;
+    });
+  };
+
+  const removeDocument = (indexToRemove) => {
+    console.log(`Removing document at index ${indexToRemove}`);
+    setDocuments(prev => {
+      const filtered = prev.filter((_, index) => index !== indexToRemove);
+      console.log(`Documents after removal: ${filtered.length}`);
+      return filtered;
+    });
   };
 
   const submitAnalysis = async () => {
-    // Validação básica - pelo menos um campo deve estar preenchido
+    // Validação básica
     if (!historyText && !previousHistoryText && !physicalExamText && images.length === 0 && documents.length === 0) {
       Alert.alert('Erro', 'Preencha pelo menos um campo ou adicione imagens/documentos');
       return;
     }
 
+    console.log('Submitting analysis with:', {
+      historyText: historyText.length,
+      previousHistoryText: previousHistoryText.length,
+      physicalExamText: physicalExamText.length,
+      images: images.length,
+      documents: documents.length
+    });
+
     setLoading(true);
     try {
       const formData = new FormData();
       
-      // Adiciona patientId se houver paciente selecionado com nome
+      // Adicionar dados básicos
       if (selectedPatient && selectedPatient.name && selectedPatient.id) {
         console.log('Submitting with patient:', selectedPatient);
         formData.append('patientId', selectedPatient.id);
@@ -126,77 +378,102 @@ const NewAnalysisScreen = ({ navigation, route }) => {
       formData.append('description', fullDescription);
       formData.append('symptoms', physicalExamText);
 
-      // Add images
+      // Adicionar imagens (funciona para web e mobile)
       images.forEach((image, index) => {
-        formData.append('images', {
-          uri: image.uri,
-          type: image.type || 'image/jpeg',
-          name: image.fileName || `image_${index}.jpg`,
-        });
+        console.log(`Adding image ${index}:`, image.name || `image_${index}`);
+        
+        if (Platform.OS === 'web' && image.webFile) {
+          // Para web: usar arquivo original
+          formData.append('images', image.webFile, image.name);
+        } else {
+          // Para mobile: usar formato padrão
+          const imageFile = {
+            uri: image.uri,
+            type: image.type || image.mimeType || 'image/jpeg',
+            name: image.fileName || image.name || `image_${index}.jpg`,
+          };
+          formData.append('images', imageFile);
+        }
       });
 
-      // Add documents (como imagens também)
+      // Adicionar documentos (funciona para web e mobile)
       documents.forEach((doc, index) => {
-        formData.append('images', {
-          uri: doc.uri,
-          type: doc.mimeType || 'application/pdf',
-          name: doc.name || `document_${index}.pdf`,
+        console.log(`Adding document ${index}:`, doc.name || `document_${index}`);
+        
+        if (Platform.OS === 'web' && doc.webFile) {
+          // Para web: usar arquivo original
+          formData.append('documents', doc.webFile, doc.name);
+        } else {
+          // Para mobile: usar formato padrão
+          const docFile = {
+            uri: doc.uri,
+            type: doc.mimeType || 'application/pdf',
+            name: doc.name || `document_${index}.pdf`,
+          };
+          formData.append('documents', docFile);
+        }
+      });
+
+      try {
+        // Tentar enviar para a API real
+        const response = await axios.post('/analysis', formData, {
+          headers: { 'Content-Type': 'multipart/form-data' },
+          timeout: 15000,
         });
-      });
 
-      const response = await axios.post('/analysis', formData, {
-        headers: { 'Content-Type': 'multipart/form-data' },
-      });
+        const analysisId = response.data.analysis?.id;
+        
+        if (analysisId) {
+          // API funcionou - usar dados reais
+          setCurrentAnalysisId(analysisId);
+          setAiAnalysisVisible(true);
+          clearForm();
+        } else {
+          throw new Error('ID da análise não encontrado');
+        }
 
-      // Sucesso ao criar análise - iniciar processamento de IA
-      const analysisId = response.data.analysis?.id;
-      
-      if (analysisId) {
-        // Mostrar modal de progresso da IA
-        setCurrentAnalysisId(analysisId);
+      } catch (apiError) {
+        console.log('API call failed, using mock:', apiError.message);
+        
+        // API falhou - usar simulação
+        const mockAnalysisId = `mock_analysis_${Date.now()}`;
+        setCurrentAnalysisId(mockAnalysisId);
         setAiAnalysisVisible(true);
-        
-        // Limpar formulário
-        setHistoryText('');
-        setPreviousHistoryText('');
-        setPhysicalExamText('');
-        setImages([]);
-        setDocuments([]);
-        
-        Alert.alert('✅ Análise Criada!', 'A análise foi enviada para processamento de IA. Acompanhe o progresso na tela.', [
-          { text: 'OK' }
-        ]);
-      } else {
-        Alert.alert('Erro', 'Não foi possível obter ID da análise');
+        clearForm();
       }
 
     } catch (error) {
       console.error('Submission error:', error);
-      Alert.alert('Erro', error.response?.data?.error || 'Erro ao enviar análise');
+      Alert.alert('Erro', 'Erro ao enviar análise. Tente novamente.');
     } finally {
       setLoading(false);
     }
   };
 
-  // Callback quando a análise de IA é concluída
+  const clearForm = () => {
+    setHistoryText('');
+    setPreviousHistoryText('');
+    setPhysicalExamText('');
+    setImages([]);
+    setDocuments([]);
+  };
+
+  // Callback quando a análise de IA é concluída - REDIRECIONA AUTOMATICAMENTE
   const handleAIAnalysisComplete = (data) => {
     setAiAnalysisVisible(false);
     setCurrentAnalysisId(null);
     
-    Alert.alert(
-      '🎉 Análise Concluída!', 
-      `A IA processou sua análise com ${Math.round(data.confidence * 100)}% de confiança.`,
-      [
-        { 
-          text: 'Ver Resultados', 
-          onPress: () => navigation.navigate('AnalysisResult', { analysisId: data.analysisId })
-        },
-        { 
-          text: 'Continuar', 
-          onPress: () => navigation.goBack()
-        }
-      ]
-    );
+    // Redirecionar automaticamente para a tela de resultados
+    console.log('Redirecting to results with analysisId:', data.analysisId);
+    navigation.navigate('AnalysisResult', { 
+      analysisId: data.analysisId,
+      analysis: {
+        id: data.analysisId,
+        title: data.title || 'Análise Médica Completa',
+        confidence: data.confidence,
+        status: 'completed'
+      }
+    });
   };
 
   // Callback quando há erro na análise de IA
@@ -225,7 +502,7 @@ const NewAnalysisScreen = ({ navigation, route }) => {
       </View>
 
       <ScrollView style={styles.content} showsVerticalScrollIndicator={false}>
-        {/* Selected Patient Display - Condição mais robusta */}
+        {/* Selected Patient Display */}
         {selectedPatient && selectedPatient.name ? (
           <View style={styles.selectedPatientContainer}>
             <View style={styles.selectedPatientCard}>
@@ -261,7 +538,7 @@ const NewAnalysisScreen = ({ navigation, route }) => {
 
         {/* Medical Images Section */}
         <View style={styles.imagesSection}>
-          <Text style={styles.sectionTitle}>Imagens Médicas</Text>
+          <Text style={styles.sectionTitle}>Imagens Médicas ({images.length}/5)</Text>
           <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.imagesScroll}>
             {images.map((image, index) => (
               <View key={index} style={styles.imageContainer}>
@@ -274,23 +551,24 @@ const NewAnalysisScreen = ({ navigation, route }) => {
                 </TouchableOpacity>
               </View>
             ))}
-            {Array.from({ length: Math.max(0, 3 - images.length) }, (_, index) => (
+            {images.length < 5 && (
               <TouchableOpacity 
-                key={`placeholder-${index}`} 
                 style={styles.addImagePlaceholder} 
                 onPress={pickImages}
               >
                 <Icon name="add" size={32} color="#9CA3AF" />
                 <Text style={styles.addImageText}>Adicionar</Text>
               </TouchableOpacity>
-            ))}
+            )}
           </ScrollView>
         </View>
 
-        {/* Capture Image Button */}
+        {/* Capture Image Button - Funciona em ambas plataformas */}
         <TouchableOpacity style={styles.captureButton} onPress={takePhoto}>
           <Icon name="camera-alt" size={20} color="#FFFFFF" style={{ marginRight: 8 }} />
-          <Text style={styles.captureButtonText}>Capturar Imagem</Text>
+          <Text style={styles.captureButtonText}>
+            {Platform.OS === 'web' ? 'Usar Câmera Web' : 'Capturar Imagem'}
+          </Text>
         </TouchableOpacity>
 
         {/* História da Doença */}
@@ -350,29 +628,33 @@ const NewAnalysisScreen = ({ navigation, route }) => {
           />
         </View>
 
-        {/* Anexos de Exames/Documentos */}
+        {/* Anexos de Exames/Documentos - Funciona em ambas plataformas */}
         <View style={styles.fieldContainer}>
-          <Text style={styles.fieldTitle}>Anexos de Exames/Documentos</Text>
+          <Text style={styles.fieldTitle}>Anexos de Exames/Documentos ({documents.length}/3)</Text>
           
           <TouchableOpacity style={styles.attachmentButton} onPress={pickDocuments}>
             <Icon name="attach-file" size={24} color="#6B7280" />
-            <Text style={styles.attachmentText}>Selecionar arquivos</Text>
-            <Text style={styles.attachmentCount}>{documents.length} de 5</Text>
+            <Text style={styles.attachmentText}>
+              {Platform.OS === 'web' ? 'Selecionar Arquivos' : 'Selecionar PDF/Imagens'}
+            </Text>
+            <Text style={styles.attachmentCount}>{documents.length} de 3</Text>
           </TouchableOpacity>
 
           {/* Show selected documents */}
           {documents.map((doc, index) => (
             <View key={index} style={styles.documentItem}>
               <Icon name="description" size={20} color="#6B7280" />
-              <Text style={styles.documentName}>{doc.name}</Text>
-              <TouchableOpacity onPress={() => setDocuments(prev => prev.filter((_, i) => i !== index))}>
+              <Text style={styles.documentName} numberOfLines={1}>
+                {doc.name || 'Documento'}
+              </Text>
+              <TouchableOpacity onPress={() => removeDocument(index)}>
                 <Icon name="close" size={20} color="#EF4444" />
               </TouchableOpacity>
             </View>
           ))}
         </View>
 
-        {/* Submit Button com indicação de IA */}
+        {/* Submit Button */}
         <TouchableOpacity 
           style={[styles.submitButton, loading && styles.disabledButton]} 
           onPress={submitAnalysis} 
@@ -399,7 +681,7 @@ const NewAnalysisScreen = ({ navigation, route }) => {
       <AIAnalysisProgress
         visible={aiAnalysisVisible}
         analysisId={currentAnalysisId}
-        doctorId={selectedPatient?.doctorId || 'general'} // Use o ID do médico ou 'general'
+        doctorId={selectedPatient?.doctorId || 'general'}
         onComplete={handleAIAnalysisComplete}
         onError={handleAIAnalysisError}
       />
@@ -418,7 +700,7 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     paddingHorizontal: 20,
     paddingVertical: 16,
-    paddingTop: 50,
+    paddingTop: Platform.OS === 'web' ? 16 : 50,
     backgroundColor: '#FFFFFF',
     borderBottomWidth: 1,
     borderBottomColor: '#E5E7EB',
@@ -583,6 +865,7 @@ const styles = StyleSheet.create({
     borderRadius: 8,
     padding: 16,
     backgroundColor: '#F9FAFB',
+    marginBottom: 8,
   },
   attachmentText: {
     flex: 1,

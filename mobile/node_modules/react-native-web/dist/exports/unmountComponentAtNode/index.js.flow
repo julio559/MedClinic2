@@ -6,6 +6,5 @@
  *
  * @noflow
  */
-
 import { unmountComponentAtNode } from 'react-dom';
 export default unmountComponentAtNode;
