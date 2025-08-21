@@ -31,7 +31,7 @@ const REQUIRED_CATEGORIES = [
 /**
  * IMPORTANTE:
  * Mantivemos o mesmo schema (resultado:string, justificativa:string, confianca:number) para não quebrar o salvamento.
- * O "resultado" agora vem ricamente formatado (markdown leve) com subtítulos e listas.
+ * O "resultado" agora vem ricamente formatado (markdown leve) SEM usar * ou -.
  */
 const JSON_SCHEMA_TEXT = `
 Objeto JSON com 7 chaves obrigatórias:
@@ -47,7 +47,8 @@ Objeto JSON com 7 chaves obrigatórias:
 
 Regras:
 - Responder SOMENTE com JSON válido (sem texto extra).
-- Campo "resultado" deve ser um texto rico (markdown leve) com subtítulos "###" e listas "-" ou "•".
+- Campo "resultado" deve ser um texto rico (markdown leve) com subtítulos "###" e listas com • (bullet) ou numeração (1., 2., 3.).
+- NÃO utilizar asteriscos (*) nem hífens (-) como marcadores ou para ênfase; evite itálico/negrito com * ou _. 
 - Sempre que possível, incluir: probabilidades estimadas (%), sinais de alarme, fatores de risco, rastros de evidência e CID-10.
 - Em "abordagem_diagnostica": incluir Diferenciais (3–6 com %), Exames prioritários (com motivo/impacto), Red flags, e critérios clínicos se houver.
 - Em "abordagem_terapeutica": incluir medidas não farmacológicas (curto e longo prazo), farmacológicas (classes, 1ª/2ª linha), doses usuais (adulto/ajustes), principais efeitos adversos e interações.
@@ -130,7 +131,8 @@ CASO ATUAL
 INSTRUÇÕES DE FORMATAÇÃO
 - Use o SCHEMA abaixo e responda APENAS com JSON válido.
 - Eleve o nível de detalhe: inclua probabilidades (%), red flags, CID-10 quando aplicável, critérios diagnósticos, impactos de exames, e doses/posologia em linguagem clínica segura.
-- Em cada "resultado", use markdown leve com "###" para subtítulos e "-" para listas (sem tabelas).
+- Em cada "resultado", use markdown leve com "###" para subtítulos e listas com • (bullet) ou numeração (1., 2., 3.).
+- NÃO use asteriscos (*) nem hífens (-) como marcadores ou para ênfase; evite itálico/negrito com * ou _.
 - Mantenha linguagem técnica, objetiva e baseada em evidência; cite diretrizes quando relevante (ex.: AAD, BAD, IDSA, AHA/ACC, etc.), mas sem links.
 
 SCHEMA
@@ -165,7 +167,7 @@ const analyzeImages = async (medicalImages) => {
               {
                 role: "system",
                 content:
-                  "Você é um especialista em interpretação de imagens médicas (dermatologia/dermatoscopia e radiologia). Produza laudo técnico, objetivo, com achados descritivos, impressões diagnósticas diferenciais (com probabilidade) e recomendações de exames adicionais quando pertinentes."
+                  "Você é um especialista em interpretação de imagens médicas (dermatologia/dermatoscopia e radiologia). Produza laudo técnico, objetivo, com achados descritivos, impressões diagnósticas diferenciais (com probabilidade) e recomendações de exames adicionais quando pertinentes. Use formatação sem asteriscos (*) e sem hífens (-); prefira bullets (•) e subtítulos com ###."
               },
               {
                 role: "user",
@@ -173,13 +175,13 @@ const analyzeImages = async (medicalImages) => {
                   {
                     type: "text",
                     text:
-`Gere LAUDO detalhado:
-- Técnica/qualidade da imagem
-- Anatomia/região/lesão
-- Achados descritivos (morfologia, distribuição, coloração/padrões)
-- Hipóteses e diferenciais (3–6) com probabilidade estimada
-- Recomendações de exames/complementos (e impacto clínico)
-- Observações de segurança e sinais de alarme`
+`Gere LAUDO detalhado (sem * e -, use •):
+• Técnica/qualidade da imagem
+• Anatomia/região/lesão
+• Achados descritivos (morfologia, distribuição, coloração/padrões)
+• Hipóteses e diferenciais (3–6) com probabilidade estimada
+• Recomendações de exames/complementos (e impacto clínico)
+• Observações de segurança e sinais de alarme`
                   },
                   { type: "image_url", image_url: { url: `data:${mimeType};base64,${base64Image}` } }
                 ]
@@ -255,6 +257,9 @@ const performMedicalAnalysis = async (prompt, imageAnalysis) => {
     }
   }
 
+  // Sanitizar/embelezar textos: remover * e bullets com -, usar • e espaçamento bonito
+  data = sanitizeAndBeautifyResults(data);
+
   return data;
 };
 
@@ -270,7 +275,7 @@ async function callAIForJSON(userContent) {
         {
           role: "system",
           content:
-            "Você é um sistema de IA médica. Gere resposta APENAS em JSON válido conforme o schema fornecido. Use linguagem técnica em PT-BR."
+            "Você é um sistema de IA médica. Gere resposta APENAS em JSON válido conforme o schema fornecido. Use linguagem técnica em PT-BR. Formate sem asteriscos (*) e sem hífens (-) como marcadores; prefira bullets (•) e numeração."
         },
         { role: "user", content: userContent }
       ],
@@ -295,6 +300,10 @@ ${JSON_SCHEMA_TEXT}
 CONTEÚDO PARA REPARO (NÃO repita nada fora do JSON):
 ${invalidContent}
 
+Regras adicionais de estilo:
+- Não use * ou - como marcadores; prefira bullets (•) e/ou numeração (1., 2., 3.).
+- Não utilize ênfase com * ou _.
+
 Responda SOMENTE com JSON válido.
 `.trim();
 
@@ -302,7 +311,7 @@ Responda SOMENTE com JSON válido.
     openai.chat.completions.create({
       model: MODEL_TEXT,
       messages: [
-        { role: "system", content: "Você conserta JSON para ficar estritamente válido segundo um schema. Responda apenas JSON." },
+        { role: "system", content: "Você conserta JSON para ficar estritamente válido segundo um schema. Responda apenas JSON, sem * e -." },
         { role: "user", content: prompt }
       ],
       temperature: 0,
@@ -314,7 +323,7 @@ Responda SOMENTE com JSON válido.
 }
 
 async function regenerateAnalysisWithAI(fullPrompt, minimal = false) {
-  console.log('🔁 Regenerando análise com', MODEL_TEXT);
+  console.log('🔁 Regerando análise com', MODEL_TEXT);
   const tighten = minimal
     ? 'Forneça texto objetivo e conciso em cada campo.'
     : 'Forneça justificativas clínicas robustas, diferenciais com % e plano terapêutico prático (inclua doses usuais).';
@@ -325,6 +334,8 @@ DIRETRIZES:
 - Terminologia médica, evidência clínica, objetividade.
 - "confianca" entre 0 e 1.
 - Sem texto fora do JSON.
+- Sem asteriscos (*) e sem hífens (-) como marcadores; use bullets (•) e/ou numeração (1., 2., 3.).
+- Evite ênfase com * ou _.
 
 SCHEMA:
 ${JSON_SCHEMA_TEXT}
@@ -339,7 +350,7 @@ ${tighten}
     openai.chat.completions.create({
       model: MODEL_TEXT,
       messages: [
-        { role: "system", content: "Você é IA médica; gere JSON estritamente válido conforme schema. Sem texto extra." },
+        { role: "system", content: "Você é IA médica; gere JSON estritamente válido conforme schema. Sem texto extra. Sem * e -." },
         { role: "user", content: prompt }
       ],
       temperature: minimal ? 0.1 : 0.2,
@@ -356,6 +367,8 @@ async function fillMissingCategoriesWithAI(partialObj, missingKeys) {
 Complete as categorias faltantes no objeto abaixo, obedecendo o SCHEMA e mantendo o estilo/nível de detalhe.
 Retorne o OBJETO COMPLETO (todas as 7 categorias). Responda SOMENTE com JSON.
 
+Regra de estilo: não use * nem - como marcadores; prefira bullets (•) e/ou numeração. Evite ênfase com * ou _.
+
 SCHEMA:
 ${JSON_SCHEMA_TEXT}
 
@@ -369,7 +382,7 @@ ${JSON.stringify(partialObj)}
     openai.chat.completions.create({
       model: MODEL_TEXT,
       messages: [
-        { role: "system", content: "Você completa JSONs médicos para aderir ao schema. Responda apenas JSON." },
+        { role: "system", content: "Você completa JSONs médicos para aderir ao schema. Responda apenas JSON, sem * e -." },
         { role: "user", content: prompt }
       ],
       temperature: 0.2,
@@ -418,7 +431,7 @@ const saveAnalysisResults = async (analysisId, aiAnalysis) => {
 };
 
 // =====================
-// Utils
+// Utils (formatação/limpeza)
 // =====================
 const clamp01 = (n) => (Number.isFinite(n) ? Math.min(Math.max(n, 0), 1) : 0.75);
 
@@ -435,6 +448,45 @@ const tryParseJSON = (txt) => {
   if (!txt || typeof txt !== 'string') return null;
   try { return JSON.parse(txt); } catch { return null; }
 };
+
+// Converte bullets começando com - ou * para •, remove ênfases com * e melhora espaçamento
+function beautifyResultado(txt) {
+  if (!txt) return txt;
+  let s = String(txt);
+
+  // Remover ênfases markdown com * (itálico/negrito)
+  s = s.replace(/\*\*(.*?)\*\*/g, '$1');
+  s = s.replace(/\*(.*?)\*/g, '$1');
+
+  // Checklists/itens no início da linha: - ... ou * ...  -> • ...
+  s = s.replace(/^[ \t]*[-*][ \t]+/gm, '• ');
+  s = s.replace(/^[ \t]*[-*][ \t]*\[(?: |x|X)\][ \t]*/gm, '• ');
+
+  // Linhas com separadores (---) -> remove
+  s = s.replace(/^\s*-{3,}\s*$/gm, '');
+
+  // Garantir linha em branco após subtítulos ###
+  s = s.replace(/^(### .+)(\n)(?!\n)/gm, '$1\n');
+
+  // Compactar múltiplas linhas em branco
+  s = s.replace(/\n{3,}/g, '\n\n');
+
+  return s.trim();
+}
+
+function sanitizeAndBeautifyResults(data) {
+  for (const key of REQUIRED_CATEGORIES) {
+    if (data[key]) {
+      if (typeof data[key].resultado === 'string') {
+        data[key].resultado = beautifyResultado(data[key].resultado);
+      }
+      if (typeof data[key].justificativa === 'string') {
+        data[key].justificativa = beautifyResultado(data[key].justificativa);
+      }
+    }
+  }
+  return data;
+}
 
 // Retry simples com backoff exponencial + jitter para 429/5xx
 async function withRetries(fn, { tries = 4, baseMs = 800 } = {}) {
@@ -460,7 +512,7 @@ const validateOpenAIConfig = () => {
   if (!key) {
     console.error('❌ OPENAI_API_KEY não configurada no .env');
     return false;
-  }
+    }
   if (!/^sk-/.test(key)) {
     console.error('❌ OPENAI_API_KEY inválida (deve começar com "sk-")');
     return false;
