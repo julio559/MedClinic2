@@ -1,8 +1,8 @@
 // src/services/aiService.js
+/* eslint-disable no-console */
 const { Analysis, AnalysisResult, MedicalImage, Patient } = require('../models');
 const OpenAI = require('openai');
 const fs = require('fs');
-const path = require('path');
 
 // =====================
 // Config de modelos
@@ -16,7 +16,7 @@ const MODEL_VISION = process.env.OPENAI_VISION_MODEL || MODEL_TEXT;
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
 // =====================
-// Schema obrigatório
+// Schema obrigatório (inalterado)
 // =====================
 const REQUIRED_CATEGORIES = [
   'diagnostico_principal',
@@ -29,9 +29,10 @@ const REQUIRED_CATEGORIES = [
 ];
 
 /**
- * IMPORTANTE:
- * Mantivemos o mesmo schema (resultado:string, justificativa:string, confianca:number) para não quebrar o salvamento.
- * O "resultado" agora vem ricamente formatado (markdown leve) SEM usar * ou -.
+ * Mantemos o schema e chaves para não quebrar a persistência.
+ * O "diagnostico_principal.resultado" agora traz explicitamente:
+ *   ### Características essenciais
+ * com os critérios/achados-chave do caso.
  */
 const JSON_SCHEMA_TEXT = `
 Objeto JSON com 7 chaves obrigatórias:
@@ -45,16 +46,19 @@ Objeto JSON com 7 chaves obrigatórias:
   "guia_prescricao": { "resultado": string, "confianca": number (0..1), "justificativa": string }
 }
 
-Regras:
-- Responder SOMENTE com JSON válido (sem texto extra).
-- Campo "resultado" deve ser um texto rico (markdown leve) com subtítulos "###" e listas com • (bullet) ou numeração (1., 2., 3.).
-- NÃO utilizar asteriscos (*) nem hífens (-) como marcadores ou para ênfase; evite itálico/negrito com * ou _. 
-- Sempre que possível, incluir: probabilidades estimadas (%), sinais de alarme, fatores de risco, rastros de evidência e CID-10.
-- Em "abordagem_diagnostica": incluir Diferenciais (3–6 com %), Exames prioritários (com motivo/impacto), Red flags, e critérios clínicos se houver.
-- Em "abordagem_terapeutica": incluir medidas não farmacológicas (curto e longo prazo), farmacológicas (classes, 1ª/2ª linha), doses usuais (adulto/ajustes), principais efeitos adversos e interações.
-- Em "guia_prescricao": sintetizar um regime possível com posologia (unidades e intervalo), duração típica e monitorização, e alternativas se alergia/contraindicação.
+Regras de estilo e conteúdo:
+- Responda SOMENTE com JSON válido (sem texto extra).
+- Campo "resultado" com markdown leve:
+  • Subtítulos iniciando com "###"
+  • Listas com bullets "•" ou listas numeradas "1."
+  • NÃO usar asteriscos (*) nem hífens (-) como marcadores ou para ênfase; evite itálico/negrito com * ou _
+- Sempre que possível, incluir: probabilidades estimadas (%), sinais de alarme (red flags), fatores de risco, rastros de evidência e CID-10.
+- Em "diagnostico_principal.resultado", inclua obrigatoriamente a seção "### Características essenciais" com os achados-chave/criterios clínicos e laboratoriais que sustentam o diagnóstico.
+- Em "abordagem_diagnostica": Diferenciais (3–6 com %), Exames prioritários (com motivo/impacto), Red flags, e critérios clínicos/escoras se houver.
+- Em "abordagem_terapeutica": medidas não farmacológicas (curto/longo prazo), farmacológicas (classes, 1ª/2ª linha), doses usuais adultas e ajustes (renal/hepático/idoso), principais efeitos adversos e interações relevantes.
+- Em "guia_prescricao": sintetize um regime possível com posologia clara (unidade e intervalo), duração típica, monitorização, e alternativas se alergia/contraindicação.
 - "confianca": número entre 0 e 1 (0.00–1.00).
-- Se dados forem insuficientes, explicitar "Dados insuficientes" e orientar coleta/exames.
+- Se dados forem insuficientes, explicite "Dados insuficientes" e oriente coleta/exames complementares.
 `.trim();
 
 // =====================
@@ -107,38 +111,45 @@ const processWithAI = async (analysisId) => {
 };
 
 // =====================
-// Prompt base (DETALHADO)
+// Prompt base (APrimorado)
 // =====================
 const buildMedicalPrompt = (analysis) => {
   const patient = analysis.Patient;
   return `
-SISTEMA DE APOIO DIAGNÓSTICO PARA MÉDICOS (PT-BR) — MODO DETALHADO
+SISTEMA DE APOIO DIAGNÓSTICO PARA MÉDICOS (PT-BR) — MODO DETALHADO E ESTRUTURADO
+AVISO: Conteúdo destinado a profissionais. Não substitui o julgamento clínico.
 
-NOTA: Para uso por profissionais habilitados. Conteúdo não substitui o julgamento clínico.
-
-DADOS DO PACIENTE
-- Nome: ${patient?.name || 'Paciente não identificado'}
-- Idade: ${patient?.birthDate ? calculateAge(patient.birthDate) : 'Idade não informada'}
-- Sexo: ${patient?.gender || 'Não informado'}
-- História pregressa: ${patient?.medicalHistory || 'Não informada'}
-- Alergias: ${patient?.allergies || 'Não informadas'}
+PERFIL DO PACIENTE
+• Nome: ${patient?.name || 'Paciente não identificado'}
+• Idade: ${patient?.birthDate ? calculateAge(patient.birthDate) : 'Idade não informada'}
+• Sexo: ${patient?.gender || 'Não informado'}
+• História pregressa: ${patient?.medicalHistory || 'Não informada'}
+• Alergias: ${patient?.allergies || 'Não informadas'}
 
 CASO ATUAL
-- Motivo/Contexto: ${analysis.title}
-- História da doença atual: ${analysis.description || 'Não fornecida'}
-- Sintomas/Achados: ${analysis.symptoms || 'Não fornecidos'}
+• Motivo/Contexto: ${analysis.title}
+• História da doença atual: ${analysis.description || 'Não fornecida'}
+• Sintomas/Achados: ${analysis.symptoms || 'Não fornecidos'}
 
-INSTRUÇÕES DE FORMATAÇÃO
-- Use o SCHEMA abaixo e responda APENAS com JSON válido.
-- Eleve o nível de detalhe: inclua probabilidades (%), red flags, CID-10 quando aplicável, critérios diagnósticos, impactos de exames, e doses/posologia em linguagem clínica segura.
-- Em cada "resultado", use markdown leve com "###" para subtítulos e listas com • (bullet) ou numeração (1., 2., 3.).
-- NÃO use asteriscos (*) nem hífens (-) como marcadores ou para ênfase; evite itálico/negrito com * ou _.
-- Mantenha linguagem técnica, objetiva e baseada em evidência; cite diretrizes quando relevante (ex.: AAD, BAD, IDSA, AHA/ACC, etc.), mas sem links.
+DIRETRIZES DE QUALIDADE
+• Linguagem técnica, objetiva e baseada em evidência.
+• Quantificar incerteza: inclua probabilidades estimadas (%).
+• Incorporar fatores de risco, red flags e CID-10 quando aplicável.
+• Especificar impacto clínico dos exames sugeridos (o que confirma/afasta, muda conduta).
+• Em farmacoterapia: cite classes, 1ª/2ª linha, doses adultas típicas, ajustes (renal/hepático/idoso), interações relevantes e eventos adversos centrais.
+• Segurança: destaque condutas imediatas quando houver risco (ex.: sepse, SCA, AVC, hemorragia, obstrução biliar complicada).
+
+FORMATAÇÃO (OBRIGATÓRIA)
+• Responder APENAS com JSON válido conforme SCHEMA.
+• Subtítulos com "###".
+• Bullets com "•" ou listas numeradas "1.", "2.", ...
+• NÃO usar asteriscos (*) nem hífens (-) como marcadores; evitar itálico/negrito com * ou _.
+• No "diagnostico_principal.resultado" inclua explicitamente: "### Características essenciais" (critérios/achados clínicos e laboratoriais que sustentam o diagnóstico).
 
 SCHEMA
 ${JSON_SCHEMA_TEXT}
 
-RETORNE APENAS O JSON.
+RETORNE SOMENTE O JSON.
 `.trim();
 };
 
@@ -167,7 +178,7 @@ const analyzeImages = async (medicalImages) => {
               {
                 role: "system",
                 content:
-                  "Você é um especialista em interpretação de imagens médicas (dermatologia/dermatoscopia e radiologia). Produza laudo técnico, objetivo, com achados descritivos, impressões diagnósticas diferenciais (com probabilidade) e recomendações de exames adicionais quando pertinentes. Use formatação sem asteriscos (*) e sem hífens (-); prefira bullets (•) e subtítulos com ###."
+                  "Você é um especialista em interpretação de imagens médicas (dermatologia/dermatoscopia e radiologia). Produza laudo técnico, objetivo, com achados descritivos, diferenciais com probabilidade e recomendações claras. Formate com subtítulos '###' e bullets '•'. Não use * ou -."
               },
               {
                 role: "user",
@@ -180,7 +191,7 @@ const analyzeImages = async (medicalImages) => {
 • Anatomia/região/lesão
 • Achados descritivos (morfologia, distribuição, coloração/padrões)
 • Hipóteses e diferenciais (3–6) com probabilidade estimada
-• Recomendações de exames/complementos (e impacto clínico)
+• Recomendações de exames/complementos (com impacto clínico)
 • Observações de segurança e sinais de alarme`
                   },
                   { type: "image_url", image_url: { url: `data:${mimeType};base64,${base64Image}` } }
@@ -219,7 +230,7 @@ const analyzeImages = async (medicalImages) => {
 };
 
 // =====================
-// Geração principal
+// Geração principal (com validação forte de JSON)
 // =====================
 const performMedicalAnalysis = async (prompt, imageAnalysis) => {
   const fullPrompt = `${prompt}${imageAnalysis || ''}`.trim();
@@ -257,7 +268,7 @@ const performMedicalAnalysis = async (prompt, imageAnalysis) => {
     }
   }
 
-  // Sanitizar/embelezar textos: remover * e bullets com -, usar • e espaçamento bonito
+  // Sanitizar textos: remover * e - como marcadores, ajustar bullets e subtítulos
   data = sanitizeAndBeautifyResults(data);
 
   return data;
@@ -275,7 +286,7 @@ async function callAIForJSON(userContent) {
         {
           role: "system",
           content:
-            "Você é um sistema de IA médica. Gere resposta APENAS em JSON válido conforme o schema fornecido. Use linguagem técnica em PT-BR. Formate sem asteriscos (*) e sem hífens (-) como marcadores; prefira bullets (•) e numeração."
+            "Você é um sistema de IA médica. Gere resposta APENAS em JSON estritamente válido conforme o schema. Linguagem técnica em PT-BR. Formate com '###' e bullets '•'. Proibido usar * e - como marcadores; evite itálico/negrito com * ou _."
         },
         { role: "user", content: userContent }
       ],
@@ -292,17 +303,18 @@ async function callAIForJSON(userContent) {
 async function repairJsonWithAI(invalidContent) {
   console.log('🧩 Reparando JSON inválido com', MODEL_TEXT);
   const prompt = `
-O conteúdo abaixo NÃO é JSON válido ou viola o schema. Conserte para JSON VÁLIDO e COMPLETE todas as chaves obrigatórias.
+O conteúdo abaixo NÃO é JSON válido ou viola o schema. Corrija para JSON VÁLIDO e COMPLETE todas as chaves obrigatórias.
 
 SCHEMA:
 ${JSON_SCHEMA_TEXT}
 
-CONTEÚDO PARA REPARO (NÃO repita nada fora do JSON):
+CONTEÚDO PARA REPARO (NÃO inclua nada fora do JSON):
 ${invalidContent}
 
 Regras adicionais de estilo:
-- Não use * ou - como marcadores; prefira bullets (•) e/ou numeração (1., 2., 3.).
-- Não utilize ênfase com * ou _.
+- Subtítulos "###"
+- Bullets "•" ou numeração "1."
+- Não use * ou - como marcadores; evite ênfase com * ou _.
 
 Responda SOMENTE com JSON válido.
 `.trim();
@@ -311,7 +323,7 @@ Responda SOMENTE com JSON válido.
     openai.chat.completions.create({
       model: MODEL_TEXT,
       messages: [
-        { role: "system", content: "Você conserta JSON para ficar estritamente válido segundo um schema. Responda apenas JSON, sem * e -." },
+        { role: "system", content: "Você repara JSONs para aderir estritamente ao schema. Responda apenas JSON. Sem * e -." },
         { role: "user", content: prompt }
       ],
       temperature: 0,
@@ -325,17 +337,18 @@ Responda SOMENTE com JSON válido.
 async function regenerateAnalysisWithAI(fullPrompt, minimal = false) {
   console.log('🔁 Regerando análise com', MODEL_TEXT);
   const tighten = minimal
-    ? 'Forneça texto objetivo e conciso em cada campo.'
-    : 'Forneça justificativas clínicas robustas, diferenciais com % e plano terapêutico prático (inclua doses usuais).';
+    ? 'Forneça texto objetivo, conciso e clinicamente seguro em cada campo.'
+    : 'Forneça justificativas robustas, diferenciais com %, CID-10 e plano terapêutico prático com doses usuais e ajustes.';
   const prompt = `
 Refaça a resposta obedecendo ao SCHEMA e às DIRETRIZES. Responda SOMENTE com JSON.
 
 DIRETRIZES:
-- Terminologia médica, evidência clínica, objetividade.
-- "confianca" entre 0 e 1.
-- Sem texto fora do JSON.
-- Sem asteriscos (*) e sem hífens (-) como marcadores; use bullets (•) e/ou numeração (1., 2., 3.).
-- Evite ênfase com * ou _.
+• Terminologia médica baseada em evidência.
+• "confianca" entre 0 e 1.
+• Subtítulos "###"; bullets "•" ou numeração.
+• Sem texto fora do JSON.
+• Proibido asteriscos (*) e hífens (-) como marcadores; evite itálico/negrito com * ou _.
+• "diagnostico_principal.resultado" DEVE incluir "### Características essenciais".
 
 SCHEMA:
 ${JSON_SCHEMA_TEXT}
@@ -367,7 +380,11 @@ async function fillMissingCategoriesWithAI(partialObj, missingKeys) {
 Complete as categorias faltantes no objeto abaixo, obedecendo o SCHEMA e mantendo o estilo/nível de detalhe.
 Retorne o OBJETO COMPLETO (todas as 7 categorias). Responda SOMENTE com JSON.
 
-Regra de estilo: não use * nem - como marcadores; prefira bullets (•) e/ou numeração. Evite ênfase com * ou _.
+Regras de estilo:
+• Subtítulos "###"
+• Bullets "•" ou listas numeradas
+• Sem * e - como marcadores; evite ênfase com * ou _.
+• Em "diagnostico_principal", inclua "### Características essenciais".
 
 SCHEMA:
 ${JSON_SCHEMA_TEXT}
@@ -462,7 +479,7 @@ function beautifyResultado(txt) {
   s = s.replace(/^[ \t]*[-*][ \t]+/gm, '• ');
   s = s.replace(/^[ \t]*[-*][ \t]*\[(?: |x|X)\][ \t]*/gm, '• ');
 
-  // Linhas com separadores (---) -> remove
+  // Separadores (---) -> remove
   s = s.replace(/^\s*-{3,}\s*$/gm, '');
 
   // Garantir linha em branco após subtítulos ###
@@ -512,7 +529,7 @@ const validateOpenAIConfig = () => {
   if (!key) {
     console.error('❌ OPENAI_API_KEY não configurada no .env');
     return false;
-    }
+  }
   if (!/^sk-/.test(key)) {
     console.error('❌ OPENAI_API_KEY inválida (deve começar com "sk-")');
     return false;

@@ -2,7 +2,7 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import {
   View, Text, StyleSheet, TouchableOpacity, ScrollView, Alert,
-  Modal, ActivityIndicator, Switch, TextInput
+  Modal, ActivityIndicator, Switch, TextInput, Platform, StatusBar
 } from 'react-native';
 import Icon from 'react-native-vector-icons/MaterialIcons';
 import { useAuth } from '../context/AuthContext';
@@ -46,7 +46,7 @@ const ProfileScreen = () => {
   const [pwdConfirm, setPwdConfirm] = useState('');
   const [changingPwd, setChangingPwd] = useState(false);
 
-  // Notificações (local; se quiser persistir, integre no /users/me depois)
+  // Notificações (local)
   const [notifyEmail, setNotifyEmail] = useState(true);
   const [notifyPush, setNotifyPush] = useState(true);
 
@@ -81,7 +81,6 @@ const ProfileScreen = () => {
     try {
       setLoadingMe(true);
       const { data } = await axios.get('/users/me');
-      // Atualiza contexto e form
       setUser?.(data);
       setForm({
         name: data?.name || '',
@@ -90,7 +89,6 @@ const ProfileScreen = () => {
         specialty: data?.specialty || '',
         phone: data?.phone || ''
       });
-      // Se você quiser carregar notificações do backend no futuro, ler de data.preferences/notifications aqui
     } catch (e) {
       console.error('me error', e?.response?.data || e.message);
     } finally {
@@ -179,7 +177,6 @@ const ProfileScreen = () => {
     );
   };
 
-  // Hoje: usa upgrade direto. Futuro (Stripe): chame um endpoint /plans/checkout e redirecione para checkoutUrl
   const doUpgrade = async (planId) => {
     setUpgrading(true);
     try {
@@ -260,10 +257,7 @@ const ProfileScreen = () => {
     }
     setChangingPwd(true);
     try {
-      await axios.post('/users/change-password', {
-        currentPassword: pwdCurrent,
-        newPassword: pwdNew
-      });
+      await axios.post('/users/change-password', { currentPassword: pwdCurrent, newPassword: pwdNew });
       setPwdModalVisible(false);
       Alert.alert('Sucesso', 'Senha alterada!');
     } catch (e) {
@@ -277,26 +271,44 @@ const ProfileScreen = () => {
   const MenuItem = ({ icon, title, onPress, showChevron = true, rightComponent }) => (
     <TouchableOpacity style={styles.menuItem} onPress={onPress}>
       <View style={styles.menuItemLeft}>
-        <Icon name={icon} size={24} color="#6B7280" />
+        <View style={styles.menuIconWrap}>
+          <Icon name={icon} size={20} color="#334155" />
+        </View>
         <Text style={styles.menuItemText}>{title}</Text>
       </View>
       <View style={styles.menuItemRight}>
         {rightComponent}
-        {showChevron && <Icon name="chevron-right" size={20} color="#6B7280" />}
+        {showChevron && <Icon name="chevron-right" size={20} color="#64748B" />}
       </View>
     </TouchableOpacity>
   );
 
   return (
-    <ScrollView style={styles.container}>
-      {/* Header */}
-      <View style={styles.profileHeader}>
-        <View style={styles.avatarContainer}>
-          <Icon name="account-circle" size={80} color="#1E3A8A" />
+    <ScrollView style={styles.container} showsVerticalScrollIndicator={false}>
+      <StatusBar barStyle="light-content" />
+
+      {/* Header Premium */}
+      <View style={styles.headerContainer}>
+        <View style={styles.headerGradient} />
+        <View style={styles.headerContent}>
+          <View style={styles.headerTop}>
+            <View style={styles.avatarRing}>
+              <Icon name="account-circle" size={82} color="#FFFFFF" />
+            </View>
+            <TouchableOpacity style={styles.headerAction} onPress={openEditProfile}>
+              <Icon name="edit" size={18} color="#FFFFFF" />
+              <Text style={styles.headerActionText}>Editar</Text>
+            </TouchableOpacity>
+          </View>
+          <Text style={styles.doctorName}>{user?.name || 'Dr. Usuário'}</Text>
+          <Text style={styles.crmNumber}>CRM {user?.crm || '000000'} • {user?.specialty || 'Especialidade'}</Text>
+
+          {/* Badge de status do plano */}
+          <View style={styles.planStatusPill}>
+            <View style={[styles.statusDot, { backgroundColor: getStatusColor(subscription?.status) }]} />
+            <Text style={styles.planStatusPillText}>{getStatusText(subscription?.status)}</Text>
+          </View>
         </View>
-        <Text style={styles.doctorName}>{user?.name || 'Dr. Usuário'}</Text>
-        <Text style={styles.crmNumber}>CRM {user?.crm || '000000'}</Text>
-        <Text style={styles.specialty}>{user?.specialty || 'Especialidade'}</Text>
       </View>
 
       {/* Plano Atual */}
@@ -304,12 +316,13 @@ const ProfileScreen = () => {
         <Text style={styles.sectionTitle}>Plano Atual</Text>
 
         {(loadingSub || loadingPlans) ? (
-          <View style={styles.loadingContainer}>
-            <ActivityIndicator size="small" color="#1E3A8A" />
+          <View style={styles.loadingCard}>
+            <ActivityIndicator size="small" color="#667EEA" />
             <Text style={styles.loadingText}>Carregando plano...</Text>
           </View>
         ) : (
           <TouchableOpacity style={styles.planCard} onPress={() => setPlansModalVisible(true)}>
+            <View style={styles.planCardGradient} />
             <View style={styles.planHeader}>
               <View style={styles.planInfo}>
                 <Text style={styles.planName}>{currentPlan?.name || '—'}</Text>
@@ -317,9 +330,9 @@ const ProfileScreen = () => {
                   {currentPlan ? `${money(currentPlan)} ${durationLabel(currentPlan)}` : '—'}
                 </Text>
               </View>
-              <View style={styles.planStatus}>
-                <View style={[styles.statusDot, { backgroundColor: getStatusColor(subscription?.status) }]} />
-                <Text style={styles.statusText}>{getStatusText(subscription?.status)}</Text>
+              <View style={styles.planChip}>
+                <Icon name="bolt" size={14} color="#FFFFFF" />
+                <Text style={styles.planChipText}>{subscription?.status ? getStatusText(subscription.status) : '—'}</Text>
               </View>
             </View>
 
@@ -339,8 +352,8 @@ const ProfileScreen = () => {
             </View>
 
             <View style={styles.upgradeHint}>
-              <Text style={styles.upgradeText}>Toque para ver outros planos</Text>
-              <Icon name="arrow-forward" size={16} color="#6B7280" />
+              <Text style={styles.upgradeText}>Ver outros planos</Text>
+              <Icon name="arrow-forward" size={16} color="#94A3B8" />
             </View>
           </TouchableOpacity>
         )}
@@ -350,8 +363,8 @@ const ProfileScreen = () => {
       <View style={styles.section}>
         <Text style={styles.sectionTitle}>Informações Pessoais</Text>
         {loadingMe ? (
-          <View style={styles.loadingContainer}>
-            <ActivityIndicator size="small" color="#1E3A8A" />
+          <View style={styles.loadingCard}>
+            <ActivityIndicator size="small" color="#667EEA" />
             <Text style={styles.loadingText}>Carregando perfil...</Text>
           </View>
         ) : (
@@ -368,11 +381,9 @@ const ProfileScreen = () => {
               <Text style={styles.infoLabel}>Telefone</Text>
               <Text style={styles.infoValue}>{user?.phone || 'Não informado'}</Text>
             </View>
-            <View style={styles.infoRow}>
+            <View style={styles.infoRowLast}>
               <Text style={styles.infoLabel}>Cadastrado em</Text>
-              <Text style={styles.infoValue}>
-                {user?.createdAt ? formatDate(user.createdAt) : 'Não informado'}
-              </Text>
+              <Text style={styles.infoValue}>{user?.createdAt ? formatDate(user.createdAt) : 'Não informado'}</Text>
             </View>
           </View>
         )}
@@ -387,16 +398,14 @@ const ProfileScreen = () => {
             onPress={() => setNotifModalVisible(true)}
             rightComponent={
               <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-                <Icon name={notifyEmail ? 'email' : 'email-off'} size={18} color="#6B7280" />
+                <Icon name={notifyEmail ? 'email' : 'email'} size={18} color={notifyEmail ? '#0EA5E9' : '#94A3B8'} />
                 <View style={{ width: 8 }} />
-                <Icon name={notifyPush ? 'notifications-active' : 'notifications-off'} size={18} color="#6B7280" />
+                <Icon name={notifyPush ? 'notifications-active' : 'notifications'} size={18} color={notifyPush ? '#F59E0B' : '#94A3B8'} />
               </View>
             }
           />
         </View>
       </View>
-
-    
 
       {/* Logout */}
       <TouchableOpacity style={styles.logoutButton} onPress={handleLogout}>
@@ -423,11 +432,7 @@ const ProfileScreen = () => {
                 return (
                   <View
                     key={plan.id}
-                    style={[
-                      styles.planOption,
-                      plan.isPopular && styles.popularPlan,
-                      isCurrent && styles.currentPlanOption
-                    ]}
+                    style={[styles.planOption, plan.isPopular && styles.popularPlan, isCurrent && styles.currentPlanOption]}
                   >
                     {plan.isPopular && (
                       <View style={[styles.popularBadge, { backgroundColor: color }]}>
@@ -537,30 +542,15 @@ const ProfileScreen = () => {
             <ScrollView style={{ paddingHorizontal: 20 }}>
               <View style={styles.formRow}>
                 <Text style={styles.formLabel}>Senha atual</Text>
-                <TextInput
-                  style={styles.input}
-                  secureTextEntry
-                  value={pwdCurrent}
-                  onChangeText={setPwdCurrent}
-                />
+                <TextInput style={styles.input} secureTextEntry value={pwdCurrent} onChangeText={setPwdCurrent} />
               </View>
               <View style={styles.formRow}>
                 <Text style={styles.formLabel}>Nova senha</Text>
-                <TextInput
-                  style={styles.input}
-                  secureTextEntry
-                  value={pwdNew}
-                  onChangeText={setPwdNew}
-                />
+                <TextInput style={styles.input} secureTextEntry value={pwdNew} onChangeText={setPwdNew} />
               </View>
               <View style={styles.formRow}>
                 <Text style={styles.formLabel}>Confirmar nova senha</Text>
-                <TextInput
-                  style={styles.input}
-                  secureTextEntry
-                  value={pwdConfirm}
-                  onChangeText={setPwdConfirm}
-                />
+                <TextInput style={styles.input} secureTextEntry value={pwdConfirm} onChangeText={setPwdConfirm} />
               </View>
 
               <TouchableOpacity
@@ -611,89 +601,133 @@ const ProfileScreen = () => {
 export default ProfileScreen;
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#F9FAFB' },
-  profileHeader: { backgroundColor: 'white', alignItems: 'center', padding: 32, paddingTop: 60, borderBottomWidth: 1, borderBottomColor: '#E5E7EB' },
-  avatarContainer: { marginBottom: 16 },
-  doctorName: { fontSize: 24, fontWeight: 'bold', color: '#1F2937', marginTop: 16 },
-  crmNumber: { fontSize: 16, color: '#6B7280', marginTop: 4 },
-  specialty: { fontSize: 14, color: '#6B7280', marginTop: 2 },
+  container: { flex: 1, backgroundColor: '#F8FAFC' },
 
-  section: { padding: 20 },
-  sectionTitle: { fontSize: 18, fontWeight: '600', color: '#1F2937', marginBottom: 16 },
+  // ===== Header Premium =====
+  headerContainer: { height: 220, position: 'relative', overflow: 'hidden' },
+  headerGradient: {
+    position: 'absolute', top: 0, left: 0, right: 0, bottom: 0,
+    backgroundColor: '#0F172A',
+    background: 'linear-gradient(135deg, #667EEA 0%, #764BA2 100%)',
+  },
+  headerContent: { flex: 1, paddingTop: (StatusBar.currentHeight || 0) + 24, paddingHorizontal: 20 },
+  headerTop: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  avatarRing: {
+    width: 86, height: 86, borderRadius: 43,
+    alignItems: 'center', justifyContent: 'center',
+    backgroundColor: 'rgba(255,255,255,0.18)',
+    borderWidth: 1, borderColor: 'rgba(255,255,255,0.25)'
+  },
+  headerAction: {
+    flexDirection: 'row', gap: 6, alignItems: 'center',
+    paddingHorizontal: 12, paddingVertical: 8, borderRadius: 999,
+    backgroundColor: 'rgba(255,255,255,0.15)', borderWidth: 1, borderColor: 'rgba(255,255,255,0.25)'
+  },
+  headerActionText: { color: '#FFFFFF', fontWeight: '800', fontSize: 12, letterSpacing: 0.2 },
+  doctorName: { color: '#FFFFFF', fontSize: 22, fontWeight: '800', marginTop: 16 },
+  crmNumber: { color: 'rgba(255,255,255,0.85)', fontSize: 12, marginTop: 4 },
+  planStatusPill: {
+    marginTop: 14, alignSelf: 'flex-start', flexDirection: 'row', alignItems: 'center', gap: 8,
+    paddingHorizontal: 12, paddingVertical: 6, borderRadius: 999,
+    backgroundColor: 'rgba(255,255,255,0.18)', borderWidth: 1, borderColor: 'rgba(255,255,255,0.25)'
+  },
+  planStatusPillText: { color: '#FFFFFF', fontWeight: '700', fontSize: 12 },
+  statusDot: { width: 8, height: 8, borderRadius: 4 },
 
-  loadingContainer: { flexDirection: 'row', alignItems: 'center', backgroundColor: 'white', borderRadius: 12, padding: 20 },
-  loadingText: { marginLeft: 10, color: '#6B7280', fontSize: 16 },
+  // ===== Seções =====
+  section: { paddingHorizontal: 20, paddingTop: 20 },
+  sectionTitle: { fontSize: 18, fontWeight: '800', color: '#0F172A', marginBottom: 12 },
 
-  planCard: { backgroundColor: 'white', borderRadius: 12, padding: 20, borderWidth: 2, borderColor: '#E5E7EB' },
-  planHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 16 },
+  // ===== Cards Comuns =====
+  loadingCard: {
+    flexDirection: 'row', alignItems: 'center', gap: 10,
+    backgroundColor: '#FFFFFF', borderRadius: 16, padding: 16,
+    borderWidth: 1, borderColor: '#E2E8F0',
+    ...Platform.select({ ios: { shadowColor: '#000', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.05, shadowRadius: 10 }, android: { elevation: 2 } })
+  },
+
+  // ===== Plano Atual Card =====
+  planCard: {
+    position: 'relative', overflow: 'hidden', borderRadius: 18, padding: 16,
+    borderWidth: 1, borderColor: '#E2E8F0', backgroundColor: '#FFFFFF',
+    ...Platform.select({ ios: { shadowColor: '#000', shadowOffset: { width: 0, height: 6 }, shadowOpacity: 0.06, shadowRadius: 12 }, android: { elevation: 3 } })
+  },
+  planCardGradient: {
+    position: 'absolute', top: 0, left: 0, right: 0, height: 90,
+    backgroundColor: '#EEF2FF',
+    background: 'linear-gradient(180deg, rgba(102,126,234,0.18) 0%, rgba(118,75,162,0.10) 100%)'
+  },
+  planHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 10 },
   planInfo: { flex: 1 },
-  planName: { fontSize: 20, fontWeight: 'bold', color: '#1F2937' },
-  planPrice: { fontSize: 16, color: '#6B7280', marginTop: 4 },
-  planStatus: { flexDirection: 'row', alignItems: 'center' },
-  statusDot: { width: 8, height: 8, borderRadius: 4, marginRight: 6 },
-  statusText: { fontSize: 14, color: '#6B7280', fontWeight: '500' },
-  planDetails: { marginBottom: 16 },
-  planUsage: { fontSize: 14, color: '#374151', marginBottom: 4 },
-  planExpiry: { fontSize: 14, color: '#6B7280' },
-  planProgress: { marginBottom: 16 },
-  progressBar: { height: 8, backgroundColor: '#E5E7EB', borderRadius: 4, overflow: 'hidden' },
-  progressFill: { height: '100%', borderRadius: 4 },
-  upgradeHint: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center' },
-  upgradeText: { fontSize: 14, color: '#6B7280', marginRight: 4 },
+  planName: { fontSize: 18, fontWeight: '800', color: '#0F172A' },
+  planPrice: { fontSize: 13, color: '#475569', marginTop: 4 },
+  planChip: { flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: '#1F2937', paddingHorizontal: 10, paddingVertical: 6, borderRadius: 999 },
+  planChipText: { color: '#FFFFFF', fontSize: 12, fontWeight: '700' },
+  planDetails: { marginTop: 6, marginBottom: 8 },
+  planUsage: { fontSize: 13, color: '#1F2937' },
+  planExpiry: { fontSize: 12, color: '#64748B', marginTop: 2 },
+  planProgress: { marginVertical: 6 },
+  progressBar: { height: 10, backgroundColor: '#E2E8F0', borderRadius: 999, overflow: 'hidden' },
+  progressFill: { height: '100%', borderRadius: 999 },
+  upgradeHint: { flexDirection: 'row', alignItems: 'center', justifyContent: 'flex-end', gap: 6, marginTop: 6 },
+  upgradeText: { fontSize: 12, color: '#94A3B8', fontWeight: '700' },
 
-  infoCard: { backgroundColor: 'white', borderRadius: 12, padding: 16 },
-  infoRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: '#F3F4F6' },
-  infoLabel: { fontSize: 14, color: '#6B7280' },
-  infoValue: { fontSize: 14, color: '#1F2937', fontWeight: '500', flex: 1, textAlign: 'right' },
+  // ===== Info Pessoal =====
+  infoCard: {
+    backgroundColor: '#FFFFFF', borderRadius: 16, borderWidth: 1, borderColor: '#E2E8F0',
+    ...Platform.select({ ios: { shadowColor: '#000', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.05, shadowRadius: 10 }, android: { elevation: 2 } })
+  },
+  infoRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingVertical: 14, paddingHorizontal: 14, borderBottomWidth: 1, borderBottomColor: '#F1F5F9' },
+  infoRowLast: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingVertical: 14, paddingHorizontal: 14 },
+  infoLabel: { fontSize: 13, color: '#64748B' },
+  infoValue: { fontSize: 14, color: '#0F172A', fontWeight: '700', flex: 1, textAlign: 'right' },
 
-  menuContainer: { backgroundColor: 'white', borderRadius: 12 },
-  menuItem: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', padding: 16, borderBottomWidth: 1, borderBottomColor: '#F3F4F6' },
+  // ===== Menu =====
+  menuContainer: { backgroundColor: '#FFFFFF', borderRadius: 16, borderWidth: 1, borderColor: '#E2E8F0' },
+  menuItem: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingVertical: 14, paddingHorizontal: 16, borderBottomWidth: 1, borderBottomColor: '#F1F5F9' },
   menuItemLeft: { flexDirection: 'row', alignItems: 'center', flex: 1 },
   menuItemRight: { flexDirection: 'row', alignItems: 'center' },
-  menuItemText: { fontSize: 16, color: '#1F2937', marginLeft: 12 },
+  menuIconWrap: { width: 34, height: 34, borderRadius: 17, alignItems: 'center', justifyContent: 'center', backgroundColor: '#F1F5F9', borderWidth: 1, borderColor: '#E2E8F0' },
+  menuItemText: { fontSize: 15, color: '#0F172A', marginLeft: 10, fontWeight: '700' },
 
-  logoutButton: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', backgroundColor: 'white', borderRadius: 12, padding: 16, margin: 20, borderWidth: 1, borderColor: '#FEE2E2' },
-  logoutText: { fontSize: 16, color: '#EF4444', fontWeight: '600', marginLeft: 8 },
+  // ===== Logout =====
+  logoutButton: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', backgroundColor: '#FFFFFF', borderRadius: 16, padding: 16, marginHorizontal: 20, marginTop: 16, marginBottom: 28, borderWidth: 1, borderColor: '#FEE2E2', ...Platform.select({ ios: { shadowColor: '#000', shadowOffset: { width: 0, height: 3 }, shadowOpacity: 0.06, shadowRadius: 8 }, android: { elevation: 2 } }) },
+  logoutText: { fontSize: 16, color: '#EF4444', fontWeight: '800', marginLeft: 8 },
 
-  // Modal base
+  // ===== Modal base =====
   modalOverlay: { flex: 1, backgroundColor: 'rgba(0, 0, 0, 0.5)', justifyContent: 'flex-end' },
   modalContainer: { backgroundColor: '#FFFFFF', borderTopLeftRadius: 20, borderTopRightRadius: 20, maxHeight: '85%', minHeight: '60%' },
   modalHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 20, paddingVertical: 16, paddingTop: 24, borderBottomWidth: 1, borderBottomColor: '#E5E7EB' },
-  modalTitle: { fontSize: 20, fontWeight: 'bold', color: '#1F2937' },
+  modalTitle: { fontSize: 18, fontWeight: '800', color: '#0F172A' },
 
+  // ===== Modal Planos =====
   plansContainer: { flex: 1, paddingHorizontal: 20, paddingTop: 20 },
-
-  planOption: { backgroundColor: '#F9FAFB', borderRadius: 12, padding: 20, marginBottom: 16, borderWidth: 2, borderColor: '#E5E7EB', position: 'relative' },
+  planOption: { backgroundColor: '#F9FAFB', borderRadius: 16, padding: 16, marginBottom: 16, borderWidth: 1, borderColor: '#E2E8F0', position: 'relative' },
   popularPlan: { borderColor: '#10B981', backgroundColor: '#F0FDF4' },
   currentPlanOption: { borderColor: '#3B82F6', backgroundColor: '#EFF6FF' },
-  popularBadge: { position: 'absolute', top: -10, left: 20, paddingHorizontal: 12, paddingVertical: 4, borderRadius: 12 },
-  popularText: { color: '#FFFFFF', fontSize: 12, fontWeight: 'bold' },
-  planOptionHeader: { marginBottom: 16 },
-  planOptionName: { fontSize: 20, fontWeight: 'bold', color: '#1F2937', marginBottom: 8 },
+  popularBadge: { position: 'absolute', top: -10, left: 16, paddingHorizontal: 12, paddingVertical: 4, borderRadius: 12 },
+  popularText: { color: '#FFFFFF', fontSize: 11, fontWeight: '800', letterSpacing: 0.3 },
+  planOptionHeader: { marginBottom: 10 },
+  planOptionName: { fontSize: 16, fontWeight: '800', color: '#0F172A', marginBottom: 6 },
   planPricing: { flexDirection: 'row', alignItems: 'baseline' },
-  planOptionPrice: { fontSize: 24, fontWeight: 'bold', color: '#1F2937' },
-  planDuration: { fontSize: 14, color: '#6B7280', marginLeft: 8 },
-  planFeatures: { marginBottom: 20 },
+  planOptionPrice: { fontSize: 20, fontWeight: '800', color: '#0F172A' },
+  planDuration: { fontSize: 12, color: '#64748B', marginLeft: 6 },
+  planFeatures: { marginTop: 8, marginBottom: 14 },
   featureItem: { flexDirection: 'row', alignItems: 'center', marginBottom: 8 },
-  featureText: { fontSize: 14, color: '#374151', marginLeft: 8 },
-  selectPlanButton: { borderRadius: 8, paddingVertical: 12, alignItems: 'center' },
-  selectPlanText: { color: '#FFFFFF', fontSize: 16, fontWeight: '600' },
-  currentPlanBadge: { borderRadius: 8, paddingVertical: 12, alignItems: 'center' },
-  currentPlanText: { color: '#FFFFFF', fontSize: 16, fontWeight: '600' },
+  featureText: { fontSize: 13, color: '#0F172A', marginLeft: 8 },
+  selectPlanButton: { borderRadius: 12, paddingVertical: 12, alignItems: 'center' },
+  selectPlanText: { color: '#FFFFFF', fontSize: 14, fontWeight: '800' },
+  currentPlanBadge: { borderRadius: 12, paddingVertical: 12, alignItems: 'center' },
+  currentPlanText: { color: '#FFFFFF', fontSize: 14, fontWeight: '800' },
 
-  // Forms modais
-  formRow: { marginTop: 16 },
-  formLabel: { fontSize: 14, color: '#374151', marginBottom: 6 },
-  input: {
-    backgroundColor: '#FFFFFF', borderWidth: 1, borderColor: '#E5E7EB', borderRadius: 8,
-    paddingHorizontal: 14, paddingVertical: 12, fontSize: 16
-  },
-  primaryBtn: {
-    backgroundColor: '#1E3A8A', borderRadius: 10, paddingVertical: 14, alignItems: 'center', marginTop: 20
-  },
-  primaryBtnText: { color: '#FFFFFF', fontSize: 16, fontWeight: '600' },
+  // ===== Forms modais =====
+  formRow: { marginTop: 14 },
+  formLabel: { fontSize: 13, color: '#374151', marginBottom: 6, fontWeight: '700' },
+  input: { backgroundColor: '#FFFFFF', borderWidth: 1, borderColor: '#E2E8F0', borderRadius: 12, paddingHorizontal: 14, paddingVertical: 12, fontSize: 14 },
+  primaryBtn: { backgroundColor: '#1F2937', borderRadius: 14, paddingVertical: 14, alignItems: 'center', marginTop: 20 },
+  primaryBtnText: { color: '#FFFFFF', fontSize: 14, fontWeight: '800', letterSpacing: 0.2 },
 
-  // Switches
+  // ===== Switches =====
   switchRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingVertical: 12 },
-  switchLabel: { fontSize: 16, color: '#1F2937' },
+  switchLabel: { fontSize: 15, color: '#0F172A', fontWeight: '700' },
 });
