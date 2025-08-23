@@ -14,6 +14,10 @@ const db = require('./models');
 const { validateOpenAIConfig, testOpenAIConnection } = require('./services/aiService');
 
 const app = express();
+
+/** Importante quando estiver atrás de proxy (Render, etc.) */
+app.set('trust proxy', 1);
+
 const server = createServer(app);
 const io = new Server(server, {
   cors: { origin: "*", methods: ["GET", "POST", "PUT", "DELETE"] }
@@ -30,7 +34,11 @@ if (!fs.existsSync(uploadDir)) {
 }
 
 // Middleware
-app.use(helmet());
+app.use(
+  helmet({
+    crossOriginResourcePolicy: { policy: "cross-origin" }, // permite servir imagens em <img>
+  })
+);
 app.use(cors());
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true, limit: '50mb' }));
@@ -338,7 +346,7 @@ io.on('connection', (socket) => {
   socket.on('disconnect', () => console.log('👨‍⚕️ Doctor disconnected:', socket.id));
 });
 
-const PORT = process.env.PORT || 3001;
+const PORT = Number(process.env.PORT) || 3001;
 
 /** Bootstrap */
 async function bootstrap() {
@@ -378,8 +386,8 @@ async function bootstrap() {
       console.log('💡 Para usar IA real, adicione OPENAI_API_KEY no arquivo .env');
     }
 
-    // 5) Sobe servidor
-    server.listen(PORT, () => {
+    // 5) Sobe servidor (0.0.0.0 para ambientes PaaS)
+    server.listen(PORT, '0.0.0.0', () => {
       console.log('=====================================');
       console.log('🚀 Server rodando na porta', PORT);
       console.log('🗄️ MySQL conectado:', process.env.DB_NAME);
