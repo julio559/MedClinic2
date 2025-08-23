@@ -5,7 +5,16 @@
     "version": "1.0.0",
     "orientation": "portrait",
     "userInterfaceStyle": "light",
+
+    "platforms": ["ios", "android", "web"],
     "assetBundlePatterns": ["**/*"],
+
+    "runtimeVersion": { "policy": "sdkVersion" },
+    "updates": {
+      "enabled": true,
+      "fallbackToCacheTimeout": 0
+    },
+
     "ios": {
       "supportsTablet": true
     },

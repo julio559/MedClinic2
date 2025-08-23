@@ -9,6 +9,7 @@ namespace jsi = facebook::jsi;
 #endif // __cplusplus
 
 @class EXJavaScriptRuntime;
+@class EXRawJavaScriptFunction;
 @class EXJavaScriptTypedArray;
 
 /**
@@ -18,13 +19,13 @@ NS_SWIFT_NAME(JavaScriptValue)
 @interface EXJavaScriptValue : NSObject
 
 #ifdef __cplusplus
-- (nonnull instancetype)initWithRuntime:(nonnull EXJavaScriptRuntime *)runtime
-                                  value:(std::shared_ptr<jsi::Value>)value;
+- (nonnull instancetype)initWithRuntime:(nullable EXJavaScriptRuntime *)runtime
+                                  value:(jsi::Value)value;
 
 /**
- \return the underlying `jsi::Value`.
+ Returns a copy of the underlying `jsi::Value`.
  */
-- (nonnull jsi::Value *)get;
+- (jsi::Value)get;
 #endif // __cplusplus
 
 #pragma mark - Type checking
@@ -49,10 +50,21 @@ NS_SWIFT_NAME(JavaScriptValue)
 - (nonnull NSArray<EXJavaScriptValue *> *)getArray;
 - (nonnull NSDictionary<NSString *, id> *)getDictionary;
 - (nonnull EXJavaScriptObject *)getObject;
+- (nonnull EXRawJavaScriptFunction *)getFunction;
 - (nullable EXJavaScriptTypedArray *)getTypedArray;
 
 #pragma mark - Helpers
 
 - (nonnull NSString *)toString;
+
+#pragma mark - Statics
+
+@property (class, nonatomic, assign, readonly, nonnull) EXJavaScriptValue *undefined;
+
++ (nonnull EXJavaScriptValue *)number:(double)value;
+
++ (nonnull EXJavaScriptValue *)string:(nonnull NSString *)value runtime:(nonnull EXJavaScriptRuntime *)runtime;
+
++ (nonnull EXJavaScriptValue *)from:(nullable id)value runtime:(nonnull EXJavaScriptRuntime *)runtime;
 
 @end

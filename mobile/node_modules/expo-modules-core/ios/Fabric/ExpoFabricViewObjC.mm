@@ -1,5 +1,7 @@
 // Copyright 2022-present 650 Industries. All rights reserved.
 
+#ifdef RCT_NEW_ARCH_ENABLED
+
 #import <objc/runtime.h>
 #import <ExpoModulesCore/ExpoFabricViewObjC.h>
 
@@ -8,16 +10,9 @@
 #import <ExpoModulesCore/ExpoViewComponentDescriptor.h>
 #import <ExpoModulesCore/Swift.h>
 
-#ifdef RN_FABRIC_ENABLED
-#import <React/RCTSurfacePresenter.h>
-#import <React/RCTMountingManager.h>
-#import <React/RCTComponentViewRegistry.h>
-#import <butter/map.h>
-#endif
+#import <React/React-Core-umbrella.h>
 
-#ifdef __cplusplus
 #import <string.h>
-#endif
 
 using namespace expo;
 
@@ -86,7 +81,7 @@ static NSString *normalizeEventName(NSString *eventName)
 static std::unordered_map<std::string, ExpoViewComponentDescriptor::Flavor> _componentFlavorsCache;
 
 @implementation ExpoFabricViewObjC {
-  ExpoViewEventEmitter::Shared _eventEmitter;
+  ExpoViewShadowNode::ConcreteState::Shared _state;
 }
 
 - (instancetype)initWithFrame:(CGRect)frame
@@ -94,8 +89,6 @@ static std::unordered_map<std::string, ExpoViewComponentDescriptor::Flavor> _com
   if (self = [super initWithFrame:frame]) {
     static const auto defaultProps = std::make_shared<const expo::ExpoViewProps>();
     _props = defaultProps;
-
-    self.contentView = [[UIView alloc] initWithFrame:CGRectZero];
   }
   return self;
 }
@@ -125,39 +118,35 @@ static std::unordered_map<std::string, ExpoViewComponentDescriptor::Flavor> _com
   };
 }
 
-- (void)mountChildComponentView:(UIView<RCTComponentViewProtocol> *)childComponentView index:(NSInteger)index
+- (void)finalizeUpdates:(RNComponentViewUpdateMask)updateMask
 {
-  // The `contentView` should always be at the back. Shifting the index makes sure that child components are mounted on top of it.
-  [super mountChildComponentView:childComponentView index:index + 1];
-}
+  [super finalizeUpdates:updateMask];
 
-- (void)unmountChildComponentView:(UIView<RCTComponentViewProtocol> *)childComponentView index:(NSInteger)index
-{
-  // All child components are mounted on top of `contentView`, so the index needs to be shifted by one.
-  [super unmountChildComponentView:childComponentView index:index + 1];
-}
+  if (updateMask & RNComponentViewUpdateMaskProps) {
+    const auto &newProps = static_cast<const ExpoViewProps &>(*_props);
+    NSMutableDictionary<NSString *, id> *propsMap = [[NSMutableDictionary alloc] init];
 
-- (void)updateProps:(const facebook::react::Props::Shared &)props oldProps:(const facebook::react::Props::Shared &)oldProps
-{
-  const auto &newViewProps = *std::static_pointer_cast<ExpoViewProps const>(props);
-  NSDictionary<NSString *, id> *proxiedProperties = convertFollyDynamicToId(newViewProps.proxiedProperties);
+    for (const auto &item : newProps.propsMap) {
+      NSString *propName = [NSString stringWithUTF8String:item.first.c_str()];
 
-  [self updateProps:proxiedProperties];
-  [super updateProps:props oldProps:oldProps];
-  [self viewDidUpdateProps];
-}
+      // Ignore props inherited from the base view and Yoga.
+      if ([self supportsPropWithName:propName]) {
+        propsMap[propName] = convertFollyDynamicToId(item.second);
+      }
+    }
 
-- (void)updateEventEmitter:(const react::EventEmitter::Shared &)eventEmitter
-{
-  [super updateEventEmitter:eventEmitter];
-  _eventEmitter = std::static_pointer_cast<const ExpoViewEventEmitter>(eventEmitter);
+    [self updateProps:propsMap];
+    [self viewDidUpdateProps];
+  }
 }
 
 #pragma mark - Events
 
 - (void)dispatchEvent:(nonnull NSString *)eventName payload:(nullable id)payload
 {
-  _eventEmitter->dispatch([normalizeEventName(eventName) UTF8String], [payload](jsi::Runtime &runtime) {
+  const auto &eventEmitter = static_cast<const ExpoViewEventEmitter &>(*_eventEmitter);
+
+  eventEmitter.dispatch([normalizeEventName(eventName) UTF8String], [payload](jsi::Runtime &runtime) {
     return jsi::Value(runtime, expo::convertObjCObjectToJSIValue(runtime, payload));
   });
 }
@@ -169,23 +158,29 @@ static std::unordered_map<std::string, ExpoViewComponentDescriptor::Flavor> _com
   // Implemented in `ExpoFabricView.swift`
 }
 
+- (void)updateState:(State::Shared const &)state oldState:(State::Shared const &)oldState
+{
+  _state = std::static_pointer_cast<const ExpoViewShadowNode::ConcreteState>(state);
+}
+
 - (void)viewDidUpdateProps
 {
   // Implemented in `ExpoFabricView.swift`
 }
 
-#pragma mark - Methods to override in the subclass
-
-- (nullable EXAppContext *)__injectedAppContext
+- (void)setShadowNodeSize:(float)width height:(float)height
 {
-  [NSException raise:@"UninjectedException" format:@"The AppContext must be injected in the subclass of 'ExpoFabricView'"];
-  return nil;
+  if (_state) {
+    _state->updateState(ExpoViewState(width,height));
+  }
 }
 
-- (nonnull NSString *)__injectedModuleName
+- (BOOL)supportsPropWithName:(nonnull NSString *)name
 {
-  [NSException raise:@"UninjectedException" format:@"The module name must be injected in the subclass of 'ExpoFabricView'"];
-  return nil;
+  // Implemented in `ExpoFabricView.swift`
+  return NO;
 }
 
 @end
+
+#endif // RCT_NEW_ARCH_ENABLED

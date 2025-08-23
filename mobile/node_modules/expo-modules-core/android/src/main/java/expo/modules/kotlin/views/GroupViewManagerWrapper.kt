@@ -2,11 +2,11 @@ package expo.modules.kotlin.views
 
 import android.view.View
 import android.view.ViewGroup
-import com.facebook.react.bridge.ReadableMap
-import com.facebook.react.common.MapBuilder
+import com.facebook.react.uimanager.ReactStylesDiffMap
+import com.facebook.react.uimanager.StateWrapper
 import com.facebook.react.uimanager.ThemedReactContext
 import com.facebook.react.uimanager.ViewGroupManager
-import com.facebook.react.uimanager.annotations.ReactProp
+import com.facebook.react.uimanager.getBackingMap
 import expo.modules.core.utilities.ifNull
 
 class GroupViewManagerWrapper(
@@ -17,9 +17,39 @@ class GroupViewManagerWrapper(
   override fun createViewInstance(reactContext: ThemedReactContext): ViewGroup =
     viewWrapperDelegate.createView(reactContext) as ViewGroup
 
-  @ReactProp(name = "proxiedProperties")
-  fun setProxiedProperties(view: View, proxiedProperties: ReadableMap) {
-    viewWrapperDelegate.setProxiedProperties(view, proxiedProperties)
+  override fun updateProperties(viewToUpdate: ViewGroup, props: ReactStylesDiffMap) {
+    val propsMap = props.getBackingMap()
+    // Updates expo related properties.
+    val handledProps = viewWrapperDelegate.updateProperties(viewToUpdate, propsMap)
+    // Updates remaining props using RN implementation.
+    // To not triggered undefined setters we filtrated already handled properties.
+    super.updateProperties(
+      viewToUpdate,
+      ReactStylesDiffMap(FilteredReadableMap(propsMap, handledProps))
+    )
+  }
+
+  override fun onAfterUpdateTransaction(view: ViewGroup) {
+    super.onAfterUpdateTransaction(view)
+    viewWrapperDelegate.onViewDidUpdateProps(view)
+  }
+
+  override fun updateState(
+    view: ViewGroup,
+    props: ReactStylesDiffMap?,
+    stateWrapper: StateWrapper?
+  ): Any? {
+    val view = view as? ExpoView ?: return null
+    view.stateWrapper = stateWrapper
+    return super.updateState(view, props, stateWrapper)
+  }
+
+  override fun getNativeProps(): MutableMap<String, String> {
+    val props = super.getNativeProps()
+    viewWrapperDelegate.props.forEach { (key, prop) ->
+      props[key] = prop.type.kType.classifier.toString()
+    }
+    return props
   }
 
   override fun onDropViewInstance(view: ViewGroup) {
@@ -28,19 +58,8 @@ class GroupViewManagerWrapper(
   }
 
   override fun getExportedCustomDirectEventTypeConstants(): Map<String, Any>? {
-    viewWrapperDelegate.getExportedCustomDirectEventTypeConstants()?.let {
-      val directEvents = super.getExportedCustomDirectEventTypeConstants() ?: emptyMap()
-      val builder = MapBuilder.builder<String, Any>()
-      directEvents.forEach { event ->
-        builder.put(event.key, event.value)
-      }
-      it.forEach { event ->
-        builder.put(event.key, event.value)
-      }
-      return builder.build()
-    }
-
-    return super.getExportedCustomDirectEventTypeConstants()
+    val expoEvent = viewWrapperDelegate.getExportedCustomDirectEventTypeConstants() ?: emptyMap()
+    return super.getExportedCustomDirectEventTypeConstants()?.plus(expoEvent) ?: expoEvent
   }
 
   override fun addView(parent: ViewGroup, child: View, index: Int) {

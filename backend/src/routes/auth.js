@@ -1,88 +1,144 @@
+// backend/src/routes/auth.js
 const express = require('express');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const { User, Subscription } = require('../models');
-const { validateAuth } = require('../middleware/validation');
+// Se tiver um middleware de validação, mantenha. Caso não, pode remover esta linha.
+// const { validateAuth } = require('../middleware/validation');
+
 const router = express.Router();
 
-// Register
-router.post('/register', validateAuth, async (req, res) => {
+const JWT_SECRET = process.env.JWT_SECRET;
+
+// Helper: remove campos sensíveis
+function safeUser(u) {
+  if (!u) return null;
+  return {
+    id: u.id,
+    name: u.name,
+    email: u.email,
+    phone: u.phone || null,
+    crm: u.crm || null,
+    specialty: u.specialty || null,
+    lastLogin: u.lastLogin || null,
+  };
+}
+
+// Helper: cria token JWT
+function signToken(user) {
+  if (!JWT_SECRET) {
+    throw new Error('JWT_SECRET não configurado no ambiente');
+  }
+  return jwt.sign(
+    { userId: user.id, email: user.email },
+    JWT_SECRET,
+    { expiresIn: '7d' }
+  );
+}
+
+/**
+ * REGISTRO
+ * (Se você tiver um middleware validateAuth com Joi, reative abaixo)
+ */
+router.post('/register', /* validateAuth, */ async (req, res) => {
   try {
-    const { name, email, password, phone, crm, specialty } = req.body;
-    
+    let { name, email, password, phone, crm, specialty } = req.body || {};
+    email = (email || '').trim().toLowerCase();
+
+    if (!name || !email || !password) {
+      return res.status(400).json({ error: 'Nome, email e senha são obrigatórios' });
+    }
+
+    // E-mail único
     const existingUser = await User.findOne({ where: { email } });
     if (existingUser) {
       return res.status(400).json({ error: 'Email já cadastrado' });
     }
 
-    const existingCRM = await User.findOne({ where: { crm } });
-    if (existingCRM) {
-      return res.status(400).json({ error: 'CRM já cadastrado' });
+    // CRM único (somente se enviado)
+    if (crm && String(crm).trim()) {
+      const existingCRM = await User.findOne({ where: { crm } });
+      if (existingCRM) {
+        return res.status(400).json({ error: 'CRM já cadastrado' });
+      }
     }
 
     const hashedPassword = await bcrypt.hash(password, 12);
 
     const user = await User.create({
-      name, email, password: hashedPassword, phone, crm, specialty
+      name,
+      email,
+      password: hashedPassword,
+      phone: phone || null,
+      crm: crm || null,
+      specialty: specialty || null,
     });
 
+    // Assinatura trial inicial (7 dias, 3 análises)
     const trialEndDate = new Date();
     trialEndDate.setDate(trialEndDate.getDate() + 7);
-
     await Subscription.create({
-      userId: user.id, plan: 'trial', endDate: trialEndDate, analysisLimit: 3
+      userId: user.id,
+      plan: 'trial',
+      endDate: trialEndDate,
+      analysisLimit: 3,
     });
 
-    const token = jwt.sign(
-      { userId: user.id, email: user.email },
-      process.env.JWT_SECRET,
-      { expiresIn: '7d' }
-    );
+    const token = signToken(user);
 
-    res.status(201).json({
-      message: 'Usuário criado com sucesso', token,
-      user: { id: user.id, name: user.name, email: user.email, crm: user.crm, specialty: user.specialty }
+    return res.status(201).json({
+      message: 'Usuário criado com sucesso',
+      token,
+      user: safeUser(user),
     });
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    // Em produção, evite retornar error.message direto
+    return res.status(500).json({ error: 'Erro ao registrar usuário' });
   }
 });
 
-// Login
+/**
+ * LOGIN
+ * Retorna 401 com { error: 'Credenciais inválidas' } se e-mail/senha não baterem.
+ */
 router.post('/login', async (req, res) => {
   try {
-    const { email, password } = req.body;
+    let { email, password } = req.body || {};
+    email = (email || '').trim().toLowerCase();
 
-    const user = await User.findOne({ 
-      where: { email }, include: [{ model: Subscription }]
+    if (!email || !password) {
+      return res.status(400).json({ error: 'Email e senha são obrigatórios' });
+    }
+
+    const user = await User.findOne({
+      where: { email },
+      include: [{ model: Subscription }],
     });
 
+    // Mesmo retorno genérico para evitar revelar qual campo falhou
     if (!user) {
       return res.status(401).json({ error: 'Credenciais inválidas' });
     }
 
-    const isPasswordValid = await bcrypt.compare(password, user.password);
-    if (!isPasswordValid) {
+    const ok = await bcrypt.compare(password, user.password);
+    if (!ok) {
       return res.status(401).json({ error: 'Credenciais inválidas' });
     }
 
     await user.update({ lastLogin: new Date() });
 
-    const token = jwt.sign(
-      { userId: user.id, email: user.email },
-      process.env.JWT_SECRET,
-      { expiresIn: '7d' }
-    );
+    const token = signToken(user);
 
-    res.json({
-      message: 'Login realizado com sucesso', token,
+    return res.json({
+      message: 'Login realizado com sucesso',
+      token,
       user: {
-        id: user.id, name: user.name, email: user.email, 
-        crm: user.crm, specialty: user.specialty, subscription: user.Subscription
-      }
+        ...safeUser(user),
+        subscription: user.Subscription || null,
+      },
     });
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    return res.status(500).json({ error: 'Erro ao realizar login' });
   }
 });
 
