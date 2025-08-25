@@ -2,7 +2,7 @@
 const express = require('express');
 const db = require('../models');
 
-// ✅ Import compatível com export default OU nomeado
+// Import compatível com export default OU nomeado
 const authModule = require('../middleware/auth');
 const authenticate = authModule?.authenticate || authModule;
 
@@ -12,31 +12,25 @@ const sequelize = db.sequelize;
 /* ===========================
  * Helpers de schema / columns
  * =========================== */
-
-// Descobre o nome do schema (database) atual.
-// Prioridade: ENV DB_NAME -> Sequelize config -> SELECT DATABASE()
-async function getSchemaName() {
+async function getSchemaName(diag) {
   if (process.env.DB_NAME) return process.env.DB_NAME;
 
-  // tenta pegar do sequelize (depende de como você inicializou)
   const cfgDb =
     sequelize?.config?.database ||
     sequelize?.options?.database ||
     null;
   if (cfgDb) return cfgDb;
 
-  // fallback: pergunta para o MySQL
   try {
     const [rows] = await sequelize.query('SELECT DATABASE() AS db');
     if (rows && rows[0]?.db) return rows[0].db;
   } catch (e) {
-    console.error('subscriptions:getSchemaName error:', e?.message || e);
+    diag.errors.push(`getSchemaName: ${e?.message || e}`);
   }
   return null;
 }
 
-// Verifica se a tabela 'plans' existe no schema
-async function plansTableExists(schemaName) {
+async function plansTableExists(schemaName, diag) {
   try {
     const [rows] = await sequelize.query(
       `SELECT TABLE_NAME AS name
@@ -48,56 +42,54 @@ async function plansTableExists(schemaName) {
     );
     return !!(rows && rows.length);
   } catch (e) {
-    console.error('subscriptions:plansTableExists error:', e?.message || e);
+    diag.errors.push(`plansTableExists: ${e?.message || e}`);
     return false;
   }
 }
 
-// Lê colunas de 'plans' e mapeia nomes canônicos
-async function getPlansColumns() {
-  const schemaName = await getSchemaName();
+async function getPlansColumns(diag) {
+  const schemaName = await getSchemaName(diag);
   if (!schemaName) {
-    throw new Error('Schema do banco não identificado (defina DB_NAME ou DATABASE_URL)');
+    diag.errors.push('Schema do banco não identificado (defina DB_NAME ou DATABASE_URL)');
+    return { set: new Set(), col: {}, schemaName: null };
   }
-  const exists = await plansTableExists(schemaName);
-  if (!exists) {
-    // Sem tabela plans: devolve um mapeamento vazio, e quem chamar trata isso.
-    return { set: new Set(), col: {} };
+  const exists = await plansTableExists(schemaName, diag);
+  if (!exists) return { set: new Set(), col: {}, schemaName };
+
+  try {
+    const [rows] = await sequelize.query(
+      `SELECT COLUMN_NAME AS name
+         FROM INFORMATION_SCHEMA.COLUMNS
+        WHERE TABLE_SCHEMA = ?
+          AND TABLE_NAME = 'plans'`,
+      { replacements: [schemaName] }
+    );
+    const set = new Set(rows.map(r => r.name));
+    const has = c => set.has(c);
+
+    return {
+      schemaName,
+      set,
+      col: {
+        id:             has('id') ? 'id' : null,
+        name:           has('name') ? 'name' : null,
+        price:          has('price') ? 'price' : null,
+        currency:       has('currency') ? 'currency' : null,
+        durationType:   has('duration_type') ? 'duration_type' : (has('durationType') ? 'durationType' : null),
+        durationValue:  has('duration_value') ? 'duration_value' : (has('durationValue') ? 'durationValue' : null),
+        analysisLimit:  has('analysis_limit') ? 'analysis_limit' : (has('analysisLimit') ? 'analysisLimit' : null),
+        isPopular:      has('is_popular') ? 'is_popular' : (has('isPopular') ? 'isPopular' : null),
+        isActive:       has('is_active') ? 'is_active' : (has('isActive') ? 'isActive' : null),
+        features:       has('features') ? 'features' : null,
+        color:          has('color') ? 'color' : null,
+        createdAt:      (has('created_at') && 'created_at') || (has('createdAt') && 'createdAt') || null,
+        updatedAt:      (has('updated_at') && 'updated_at') || (has('updatedAt') && 'updatedAt') || null,
+      }
+    };
+  } catch (e) {
+    diag.errors.push(`getPlansColumns: ${e?.message || e}`);
+    return { set: new Set(), col: {}, schemaName };
   }
-
-  const [rows] = await sequelize.query(
-    `SELECT COLUMN_NAME AS name
-       FROM INFORMATION_SCHEMA.COLUMNS
-      WHERE TABLE_SCHEMA = ?
-        AND TABLE_NAME = 'plans'`,
-    { replacements: [schemaName] }
-  );
-  const set = new Set(rows.map(r => r.name));
-  const has = c => set.has(c);
-
-  return {
-    set,
-    col: {
-      id:             has('id') ? 'id' : null,
-      name:           has('name') ? 'name' : null,
-      price:          has('price') ? 'price' : null,
-      currency:       has('currency') ? 'currency' : null,
-
-      durationType:   has('duration_type') ? 'duration_type' : (has('durationType') ? 'durationType' : null),
-      durationValue:  has('duration_value') ? 'duration_value' : (has('durationValue') ? 'durationValue' : null),
-
-      analysisLimit:  has('analysis_limit') ? 'analysis_limit' : (has('analysisLimit') ? 'analysisLimit' : null),
-
-      isPopular:      has('is_popular') ? 'is_popular' : (has('isPopular') ? 'isPopular' : null),
-      isActive:       has('is_active') ? 'is_active' : (has('isActive') ? 'isActive' : null),
-
-      features:       has('features') ? 'features' : null,
-      color:          has('color') ? 'color' : null,
-
-      createdAt:      (has('created_at') && 'created_at') || (has('createdAt') && 'createdAt') || null,
-      updatedAt:      (has('updated_at') && 'updated_at') || (has('updatedAt') && 'updatedAt') || null,
-    }
-  };
 }
 
 function normalizePlanRow(row, col) {
@@ -105,7 +97,7 @@ function normalizePlanRow(row, col) {
 
   let features = pick('features');
   if (typeof features === 'string') {
-    try { features = JSON.parse(features); } catch { /* fica string mesmo */ }
+    try { features = JSON.parse(features); } catch { /* deixa string */ }
   }
 
   return {
@@ -126,47 +118,51 @@ function normalizePlanRow(row, col) {
 }
 
 function buildSelectCols(col) {
-  // Seleciona apenas o que existe
   const keys = Object.keys(col).filter(k => !!col[k]);
   const cols = keys.map(k => `\`${col[k]}\` AS \`${col[k]}\``);
-
-  // Essenciais se não detectados
   if (!col.id) cols.push('`id`');
   if (!col.name) cols.push('`name`');
   if (!col.price) cols.push('`price`');
   if (!col.currency) cols.push('`currency`');
-
   return cols.join(', ');
 }
 
-async function getPlanById(planId) {
-  const { col, set } = await getPlansColumns();
-  if (!set || set.size === 0) return null; // não há tabela plans
-
+async function getPlanById(planId, diag) {
+  const { col, set } = await getPlansColumns(diag);
+  if (!set || set.size === 0) return null;
   const colsSel = buildSelectCols(col);
   const keyId = col.id || 'id';
-  const [rows] = await sequelize.query(
-    `SELECT ${colsSel} FROM \`plans\` WHERE \`${keyId}\` = ? LIMIT 1`,
-    { replacements: [planId] }
-  );
-  if (!rows || rows.length === 0) return null;
-  return normalizePlanRow(rows[0], col);
+  try {
+    const [rows] = await sequelize.query(
+      `SELECT ${colsSel} FROM \`plans\` WHERE \`${keyId}\` = ? LIMIT 1`,
+      { replacements: [planId] }
+    );
+    if (!rows || rows.length === 0) return null;
+    return normalizePlanRow(rows[0], col);
+  } catch (e) {
+    diag.errors.push(`getPlanById: ${e?.message || e}`);
+    return null;
+  }
 }
 
-// Se não achar o ID, pega o primeiro ativo (ou o primeiro de todos)
-async function getAnyActivePlanByIdOrFirst(planId) {
-  const tried = await getPlanById(planId);
+async function getAnyActivePlanByIdOrFirst(planId, diag) {
+  const tried = planId ? await getPlanById(planId, diag) : null;
   if (tried) return tried;
 
-  const { col, set } = await getPlansColumns();
-  if (!set || set.size === 0) return null; // sem tabela
+  const { col, set } = await getPlansColumns(diag);
+  if (!set || set.size === 0) return null;
 
   const colsSel = buildSelectCols(col);
   const whereActive = col.isActive ? `WHERE \`${col.isActive}\` = 1` : '';
   const order = col.name ? `ORDER BY \`${col.name}\` ASC` : '';
-  const [rows] = await sequelize.query(`SELECT ${colsSel} FROM \`plans\` ${whereActive} ${order} LIMIT 1`);
-  if (rows && rows.length) return normalizePlanRow(rows[0], col);
-  return null;
+  try {
+    const [rows] = await sequelize.query(`SELECT ${colsSel} FROM \`plans\` ${whereActive} ${order} LIMIT 1`);
+    if (rows && rows.length) return normalizePlanRow(rows[0], col);
+    return null;
+  } catch (e) {
+    diag.errors.push(`getAnyActivePlanByIdOrFirst: ${e?.message || e}`);
+    return null;
+  }
 }
 
 function calculateEndDate(durationType, durationValue) {
@@ -175,7 +171,7 @@ function calculateEndDate(durationType, durationValue) {
   if (durationType === 'days') now.setDate(now.getDate() + val);
   else if (durationType === 'months') now.setMonth(now.getMonth() + val);
   else if (durationType === 'years') now.setFullYear(now.getFullYear() + val);
-  else now.setMonth(now.getMonth() + val); // default months
+  else now.setMonth(now.getMonth() + val);
   return now;
 }
 
@@ -183,21 +179,28 @@ function calculateEndDate(durationType, durationValue) {
  * ROTAS
  * ======= */
 
-// GET /api/subscriptions — retorna assinatura + info do plano
+// GET /api/subscriptions
 router.get('/', authenticate, async (req, res) => {
+  const diag = { errors: [], debug: Boolean(req.query?.debug) };
   try {
-    const userId = req.userId; // ✅ middleware define req.userId
+    const userId = req.userId;
     if (!userId) return res.status(401).json({ error: 'Token inválido' });
 
-    // Assinatura existente?
+    if (!db.Subscription) {
+      const msg = 'Model Subscription não encontrado em ../models (export faltando?)';
+      console.error(msg);
+      return res.status(500).json({ error: msg, ...(diag.debug && { diag }) });
+    }
+
     let subscription = await db.Subscription.findOne({ where: { userId } });
 
-    // Se não existir, tenta criar trial (ou primeiro plano ativo)
     if (!subscription) {
-      const trialOrFirst = (await getAnyActivePlanByIdOrFirst('trial')) || (await getAnyActivePlanByIdOrFirst(null));
+      const trialOrFirst =
+        (await getAnyActivePlanByIdOrFirst('trial', diag)) ||
+        (await getAnyActivePlanByIdOrFirst(null, diag));
 
       if (!trialOrFirst) {
-        // Sem tabela 'plans' ou sem planos → retorna assinatura "vazia"
+        // Sem tabela 'plans' ou sem planos
         return res.json({
           plan: 'trial',
           status: 'inactive',
@@ -205,7 +208,8 @@ router.get('/', authenticate, async (req, res) => {
           analysisUsed: 0,
           startDate: null,
           endDate: null,
-          planDetails: null
+          planDetails: null,
+          ...(diag.debug && { diag })
         });
       }
 
@@ -220,10 +224,9 @@ router.get('/', authenticate, async (req, res) => {
       });
     }
 
-    // Carrega detalhes do plano (se houver tabela/linha correspondente)
     const planDetails =
-      (await getPlanById(subscription.plan)) ||
-      (await getAnyActivePlanByIdOrFirst(subscription.plan)) ||
+      (await getPlanById(subscription.plan, diag)) ||
+      (await getAnyActivePlanByIdOrFirst(subscription.plan, diag)) ||
       null;
 
     return res.json({
@@ -234,25 +237,36 @@ router.get('/', authenticate, async (req, res) => {
       endDate: subscription.endDate,
       analysisLimit: subscription.analysisLimit,
       analysisUsed: subscription.analysisUsed,
-      planDetails
+      planDetails,
+      ...(diag.debug && { diag })
     });
   } catch (error) {
     console.error('Error loading subscription:', error?.message || error);
-    return res.status(500).json({ error: 'Erro ao carregar assinatura' });
+    return res.status(500).json({
+      error: 'Erro ao carregar assinatura',
+      ...(diag.debug && { diag: { ...diag, caught: String(error?.message || error) } })
+    });
   }
 });
 
-// POST /api/subscriptions/upgrade — troca de plano
+// POST /api/subscriptions/upgrade
 router.post('/upgrade', authenticate, async (req, res) => {
+  const diag = { errors: [], debug: Boolean(req.query?.debug) };
   try {
     const userId = req.userId;
     if (!userId) return res.status(401).json({ error: 'Token inválido' });
 
+    if (!db.Subscription) {
+      const msg = 'Model Subscription não encontrado em ../models (export faltando?)';
+      console.error(msg);
+      return res.status(500).json({ error: msg, ...(diag.debug && { diag }) });
+    }
+
     const planId = String(req.body?.plan || '').trim();
     if (!planId) return res.status(400).json({ error: 'Plano não informado' });
 
-    const plan = await getPlanById(planId);
-    if (!plan) return res.status(400).json({ error: 'Plano inválido' });
+    const plan = await getPlanById(planId, diag);
+    if (!plan) return res.status(400).json({ error: 'Plano inválido', ...(diag.debug && { diag }) });
 
     let subscription = await db.Subscription.findOne({ where: { userId } });
     const endDate = calculateEndDate(plan.durationType, plan.durationValue);
@@ -273,12 +287,11 @@ router.post('/upgrade', authenticate, async (req, res) => {
         status: 'active',
         endDate,
         analysisLimit: plan.analysisLimit,
-        // se aumentou o limite, zera o usado (opcional — regra de negócio sua)
         analysisUsed: (plan.analysisLimit > (subscription.analysisLimit || 0)) ? 0 : subscription.analysisUsed
       });
     }
 
-    const planDetails = await getPlanById(plan.id);
+    const planDetails = await getPlanById(plan.id, diag);
 
     return res.json({
       success: true,
@@ -292,19 +305,27 @@ router.post('/upgrade', authenticate, async (req, res) => {
         analysisLimit: subscription.analysisLimit,
         analysisUsed: subscription.analysisUsed,
         planDetails
-      }
+      },
+      ...(diag.debug && { diag })
     });
   } catch (error) {
     console.error('Error upgrading plan:', error?.message || error);
-    return res.status(500).json({ error: 'Erro ao atualizar plano' });
+    return res.status(500).json({
+      error: 'Erro ao atualizar plano',
+      ...(diag.debug && { diag: { ...diag, caught: String(error?.message || error) } })
+    });
   }
 });
 
-// POST /api/subscriptions/cancel — cancela (mantém até endDate)
+// POST /api/subscriptions/cancel
 router.post('/cancel', authenticate, async (req, res) => {
   try {
     const userId = req.userId;
     if (!userId) return res.status(401).json({ error: 'Token inválido' });
+
+    if (!db.Subscription) {
+      return res.status(500).json({ error: 'Model Subscription não encontrado em ../models' });
+    }
 
     const subscription = await db.Subscription.findOne({ where: { userId } });
     if (!subscription) return res.status(404).json({ error: 'Assinatura não encontrada' });
