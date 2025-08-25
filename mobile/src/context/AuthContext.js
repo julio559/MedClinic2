@@ -1,34 +1,57 @@
-// mobile/src/context/AuthContext.js
 import React, { createContext, useContext, useState, useEffect } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import axios from 'axios';
-import API_CONFIG from '../../config/api'; // ajuste o caminho se necessário
+import API_CONFIG from '../../config/api';
 
 const AuthContext = createContext();
-
 export const useAuth = () => {
-  const context = useContext(AuthContext);
-  if (!context) throw new Error('useAuth must be used within an AuthProvider');
-  return context;
+  const ctx = useContext(AuthContext);
+  if (!ctx) throw new Error('useAuth must be used within an AuthProvider');
+  return ctx;
 };
 
-// Opcional: manter fallback mock quando a API não estiver acessível em dev
-const ALLOW_MOCK_FALLBACK = true;
+// NÃO permitir mock login (evita "Token inválido" depois)
+const ALLOW_MOCK_FALLBACK = false;
 
 export const AuthProvider = ({ children }) => {
-  const [user, setUser] = useState(null);
+  const [user, setUser]   = useState(null);
   const [loading, setLoading] = useState(true);
 
-  // Base da API vinda do API_CONFIG (já inclui /api)
-  const API_URL = API_CONFIG.apiURL;
+  // Base global
+  axios.defaults.baseURL = API_CONFIG.apiURL;
+  axios.defaults.timeout = 15000;
 
-  // Configuração global do axios (mantemos axios global para não quebrar outros usos)
-  axios.defaults.baseURL = API_URL;
-  axios.defaults.timeout = 10000;
+  // Interceptor: injeta token em TODAS as requisições
+  useEffect(() => {
+    let reqId, resId;
+
+    reqId = axios.interceptors.request.use(async (config) => {
+      const token = await AsyncStorage.getItem('token');
+      if (token) config.headers.Authorization = `Bearer ${token}`;
+      return config;
+    });
+
+    resId = axios.interceptors.response.use(
+      (resp) => resp,
+      async (error) => {
+        if (error?.response?.status === 401) {
+          // token inválido/expirado → limpar e mandar pra login
+          await AsyncStorage.removeItem('token');
+          delete axios.defaults.headers.common.Authorization;
+          setUser(null);
+        }
+        return Promise.reject(error);
+      }
+    );
+
+    return () => {
+      axios.interceptors.request.eject(reqId);
+      axios.interceptors.response.eject(resId);
+    };
+  }, []);
 
   useEffect(() => {
     checkAuthStatus();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const checkAuthStatus = async () => {
@@ -36,30 +59,13 @@ export const AuthProvider = ({ children }) => {
       const token = await AsyncStorage.getItem('token');
       if (token) {
         axios.defaults.headers.common.Authorization = `Bearer ${token}`;
-
-        try {
-          const { data } = await axios.get('/users/profile');
-          setUser(data);
-        } catch (apiError) {
-          console.log('Falha ao obter /users/profile:', apiError?.message);
-          if (ALLOW_MOCK_FALLBACK) {
-            console.log('Usando usuário mock (fallback).');
-            setUser({
-              id: 'mock-user-1',
-              name: 'Dr. João Silva',
-              email: 'joao@exemplo.com',
-              crm: '12345-SP',
-              specialty: 'Clínica Geral',
-            });
-          } else {
-            await AsyncStorage.removeItem('token');
-            delete axios.defaults.headers.common.Authorization;
-            setUser(null);
-          }
-        }
+        const { data } = await axios.get('/users/profile');
+        setUser(data);
+      } else {
+        setUser(null);
       }
-    } catch (error) {
-      console.log('Auth check failed:', error);
+    } catch (err) {
+      // Sem token válido → força login
       await AsyncStorage.removeItem('token');
       delete axios.defaults.headers.common.Authorization;
       setUser(null);
@@ -78,29 +84,14 @@ export const AuthProvider = ({ children }) => {
       setUser(loggedUser);
       return { success: true };
     } catch (error) {
-      console.log('Login real falhou:', error?.message);
-
-      if (ALLOW_MOCK_FALLBACK && email && password) {
-        const mockToken = 'mock-token-' + Date.now();
-        const mockUser = {
-          id: 'mock-user-1',
-          name: 'Dr. João Silva',
-          email,
-          crm: '12345-SP',
-          specialty: 'Clínica Geral',
-        };
-        await AsyncStorage.setItem('token', mockToken);
-        axios.defaults.headers.common.Authorization = `Bearer ${mockToken}`;
-        setUser(mockUser);
-        return { success: true };
-      }
-
-      return { success: false, error: 'Credenciais inválidas ou servidor indisponível.' };
+      return { success: false, error: 'Login falhou. Verifique credenciais.' };
     }
   };
 
   const register = async (userData) => {
     try {
+      // garanta que está enviando os campos esperados pelo backend
+      // name, email, password, crm, specialty (ajuste se necessário)
       const { data } = await axios.post('/auth/register', userData);
       const { token, user: registeredUser } = data;
 
@@ -109,39 +100,18 @@ export const AuthProvider = ({ children }) => {
       setUser(registeredUser);
       return { success: true };
     } catch (error) {
-      console.log('Registro real falhou:', error?.message);
-
-      if (ALLOW_MOCK_FALLBACK && userData?.name && userData?.email && userData?.crm) {
-        const mockToken = 'mock-token-' + Date.now();
-        const mockUser = {
-          id: 'mock-user-' + Date.now(),
-          name: userData.name,
-          email: userData.email,
-          crm: userData.crm,
-          specialty: userData.specialty || 'Clínica Geral',
-        };
-        await AsyncStorage.setItem('token', mockToken);
-        axios.defaults.headers.common.Authorization = `Bearer ${mockToken}`;
-        setUser(mockUser);
-        return { success: true };
-      }
-
-      return { success: false, error: 'Dados obrigatórios ausentes ou servidor indisponível.' };
+      return { success: false, error: 'Registro falhou. Confira os dados.' };
     }
   };
 
   const logout = async () => {
-    try {
-      await AsyncStorage.removeItem('token');
-      delete axios.defaults.headers.common.Authorization;
-      setUser(null);
-    } catch (error) {
-      console.log('Logout error:', error);
-    }
+    await AsyncStorage.removeItem('token');
+    delete axios.defaults.headers.common.Authorization;
+    setUser(null);
   };
 
   return (
-    <AuthContext.Provider value={{ user, loading, login, register, logout, API_URL }}>
+    <AuthContext.Provider value={{ user, loading, login, register, logout, API_URL: API_CONFIG.apiURL }}>
       {children}
     </AuthContext.Provider>
   );
