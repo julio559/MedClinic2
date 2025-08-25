@@ -479,11 +479,12 @@ const styles = StyleSheet.create({
   },
 
   // Header Premium
-  headerContainer: {
-    height: 280,
-    position: 'relative',
-    overflow: 'hidden',
-  },
+headerContainer: {
+  // altura do header + área segura do topo
+  height: 280 + (Platform.OS === 'android' ? (StatusBar.currentHeight || 0) : 44),
+  position: 'relative',
+  overflow: 'hidden',
+},
   headerGradient: {
     position: 'absolute',
     top: 0,
@@ -501,12 +502,15 @@ const styles = StyleSheet.create({
     bottom: 0,
     backgroundColor: 'rgba(15, 23, 42, 0.3)',
   },
-  headerContent: {
-    flex: 1,
-    paddingTop: StatusBar.currentHeight + 20 || 50,
-    paddingHorizontal: 20,
-    paddingBottom: 20,
-  },
+headerContent: {
+  flex: 1,
+  // padding que considera o StatusBar no Android e o notch no iOS
+  paddingTop: Platform.OS === 'android'
+    ? ((StatusBar.currentHeight || 0) + 20)
+    : (44 + 12),
+  paddingHorizontal: 20,
+  paddingBottom: 20,
+},
   headerTop: {
     flexDirection: 'row',
     justifyContent: 'space-between',
@@ -1006,7 +1010,7 @@ const styles = StyleSheet.create({
   insightSuccess: {
     borderLeftWidth: 3,
     borderLeftColor: '#10B981',
-    backgroundColor: '#FAFFFE',
+    backgroundColor: '#070f0dff',
   },
   insightInfo: {
     borderLeftWidth: 3,

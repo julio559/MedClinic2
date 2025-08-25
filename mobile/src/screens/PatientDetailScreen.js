@@ -658,11 +658,12 @@ const styles = StyleSheet.create({
   },
 
   // Header Premium
-  headerContainer: {
-    height: 120,
-    position: 'relative',
-    overflow: 'hidden',
-  },
+ headerContainer: {
+  // altura do header + área segura do topo
+  height: 120 + (Platform.OS === 'android' ? (StatusBar.currentHeight || 0) : 44),
+  position: 'relative',
+  overflow: 'hidden',
+},
   headerGradient: {
     position: 'absolute',
     top: 0,
@@ -672,18 +673,16 @@ const styles = StyleSheet.create({
     backgroundColor: '#0F172A',
     background: 'linear-gradient(135deg, #667EEA 0%, #764BA2 100%)',
   },
-  headerContent: {
-    flex: 1,
-    paddingTop: StatusBar.currentHeight + 10 || 40,
-    paddingHorizontal: 20,
-    paddingBottom: 16,
-    justifyContent: 'center',
-  },
-  headerTop: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-  },
+ headerContent: {
+  flex: 1,
+  // padding que considera o StatusBar no Android e o notch no iOS
+  paddingTop: Platform.OS === 'android'
+    ? ((StatusBar.currentHeight || 0) + 10)
+    : (44 + 8),
+  paddingHorizontal: 20,
+  paddingBottom: 16,
+  justifyContent: 'center',
+},
   backButton: {
     width: 40,
     height: 40,
@@ -840,6 +839,8 @@ const styles = StyleSheet.create({
     color: '#6B7280',
     fontWeight: '600',
   },
+
+  
   patientStatusBadge: {
     width: 32,
     height: 32,
