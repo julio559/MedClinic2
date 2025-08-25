@@ -148,6 +148,53 @@ router.post('/change-password', authenticate, async (req, res) => {
   }
 });
 
+// POST /api/users/register
+router.post('/register', async (req, res) => {
+  try {
+    const { name, email, password, phone, crm, specialty } = req.body || {};
+
+    if (!name || !email || !password || !crm) {
+      return res.status(400).json({ error: 'Nome, e-mail, senha e CRM são obrigatórios' });
+    }
+
+    // normaliza
+    const normEmail = String(email).trim().toLowerCase();
+    const normName  = String(name).trim();
+    const normCrm   = String(crm).trim();
+
+    // unicidade
+    const emailExists = await User.findOne({ where: { email: normEmail } });
+    if (emailExists) return res.status(400).json({ error: 'E-mail já está em uso' });
+    const crmExists = await User.findOne({ where: { crm: normCrm } });
+    if (crmExists) return res.status(400).json({ error: 'CRM já está em uso' });
+
+    // hash
+    const hash = await bcrypt.hash(String(password), 10);
+
+    // ATENÇÃO: salvar em passwordHash (mapeado para a coluna "password")
+    const user = await User.create({
+      name: normName,
+      email: normEmail,
+      passwordHash: hash,
+      phone: phone ? String(phone).trim() : null,
+      crm: normCrm,
+      specialty: specialty ? String(specialty).trim() : null,
+    });
+
+    return res.status(201).json(toSafeUser(user));
+  } catch (e) {
+    // ajuda a debugar a causa real
+    if (e.name === 'SequelizeValidationError' || e.name === 'SequelizeUniqueConstraintError') {
+      const msg = e.errors?.[0]?.message || 'Erro de validação';
+      console.error('POST /users/register validation', msg, e.errors);
+      return res.status(400).json({ error: msg });
+    }
+    console.error('POST /users/register error', e);
+    return res.status(500).json({ error: 'Erro ao registrar usuário' });
+  }
+});
+
+
 /**
  * GET /api/users/stats
  * Estatísticas do médico logado
