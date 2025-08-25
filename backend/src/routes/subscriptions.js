@@ -1,21 +1,76 @@
 // backend/src/routes/subscriptions.js
 const express = require('express');
-const { authenticate } = require('../middleware/auth');
 const db = require('../models');
+
+// ✅ Import compatível com export default OU nomeado
+const authModule = require('../middleware/auth');
+const authenticate = authModule?.authenticate || authModule;
 
 const router = express.Router();
 const sequelize = db.sequelize;
 
-/** =========================================================
- * Utilidades para ler/normalizar a tabela plans dinamicamente
- * ========================================================= */
+/* ===========================
+ * Helpers de schema / columns
+ * =========================== */
+
+// Descobre o nome do schema (database) atual.
+// Prioridade: ENV DB_NAME -> Sequelize config -> SELECT DATABASE()
+async function getSchemaName() {
+  if (process.env.DB_NAME) return process.env.DB_NAME;
+
+  // tenta pegar do sequelize (depende de como você inicializou)
+  const cfgDb =
+    sequelize?.config?.database ||
+    sequelize?.options?.database ||
+    null;
+  if (cfgDb) return cfgDb;
+
+  // fallback: pergunta para o MySQL
+  try {
+    const [rows] = await sequelize.query('SELECT DATABASE() AS db');
+    if (rows && rows[0]?.db) return rows[0].db;
+  } catch (e) {
+    console.error('subscriptions:getSchemaName error:', e?.message || e);
+  }
+  return null;
+}
+
+// Verifica se a tabela 'plans' existe no schema
+async function plansTableExists(schemaName) {
+  try {
+    const [rows] = await sequelize.query(
+      `SELECT TABLE_NAME AS name
+         FROM INFORMATION_SCHEMA.TABLES
+        WHERE TABLE_SCHEMA = ?
+          AND TABLE_NAME = 'plans'
+        LIMIT 1`,
+      { replacements: [schemaName] }
+    );
+    return !!(rows && rows.length);
+  } catch (e) {
+    console.error('subscriptions:plansTableExists error:', e?.message || e);
+    return false;
+  }
+}
+
+// Lê colunas de 'plans' e mapeia nomes canônicos
 async function getPlansColumns() {
+  const schemaName = await getSchemaName();
+  if (!schemaName) {
+    throw new Error('Schema do banco não identificado (defina DB_NAME ou DATABASE_URL)');
+  }
+  const exists = await plansTableExists(schemaName);
+  if (!exists) {
+    // Sem tabela plans: devolve um mapeamento vazio, e quem chamar trata isso.
+    return { set: new Set(), col: {} };
+  }
+
   const [rows] = await sequelize.query(
     `SELECT COLUMN_NAME AS name
        FROM INFORMATION_SCHEMA.COLUMNS
       WHERE TABLE_SCHEMA = ?
         AND TABLE_NAME = 'plans'`,
-    { replacements: [process.env.DB_NAME] }
+    { replacements: [schemaName] }
   );
   const set = new Set(rows.map(r => r.name));
   const has = c => set.has(c);
@@ -50,7 +105,7 @@ function normalizePlanRow(row, col) {
 
   let features = pick('features');
   if (typeof features === 'string') {
-    try { features = JSON.parse(features); } catch { /* deixa como string */ }
+    try { features = JSON.parse(features); } catch { /* fica string mesmo */ }
   }
 
   return {
@@ -61,7 +116,7 @@ function normalizePlanRow(row, col) {
     durationType:  pick('durationType') || 'months',
     durationValue: Number(pick('durationValue') ?? 1),
     analysisLimit: Number(pick('analysisLimit') ?? 0),
-    isPopular:     Boolean(pick('isPopular')),
+    isPopular:     pick('isPopular') ? Boolean(pick('isPopular')) : false,
     isActive:      pick('isActive') === null ? true : Boolean(pick('isActive')),
     features:      features ?? [],
     color:         pick('color') || null,
@@ -71,38 +126,43 @@ function normalizePlanRow(row, col) {
 }
 
 function buildSelectCols(col) {
-  const cols = [];
-  for (const key of Object.keys(col)) {
-    if (!col[key]) continue;
-    cols.push(`\`${col[key]}\` AS \`${col[key]}\``);
-  }
-  // Essenciais — tenta forçar se não detectou
+  // Seleciona apenas o que existe
+  const keys = Object.keys(col).filter(k => !!col[k]);
+  const cols = keys.map(k => `\`${col[k]}\` AS \`${col[k]}\``);
+
+  // Essenciais se não detectados
   if (!col.id) cols.push('`id`');
   if (!col.name) cols.push('`name`');
   if (!col.price) cols.push('`price`');
   if (!col.currency) cols.push('`currency`');
+
   return cols.join(', ');
 }
 
 async function getPlanById(planId) {
-  const { col } = await getPlansColumns();
+  const { col, set } = await getPlansColumns();
+  if (!set || set.size === 0) return null; // não há tabela plans
+
   const colsSel = buildSelectCols(col);
+  const keyId = col.id || 'id';
   const [rows] = await sequelize.query(
-    `SELECT ${colsSel} FROM \`plans\` WHERE \`${col.id || 'id'}\` = ? LIMIT 1`,
+    `SELECT ${colsSel} FROM \`plans\` WHERE \`${keyId}\` = ? LIMIT 1`,
     { replacements: [planId] }
   );
   if (!rows || rows.length === 0) return null;
   return normalizePlanRow(rows[0], col);
 }
 
+// Se não achar o ID, pega o primeiro ativo (ou o primeiro de todos)
 async function getAnyActivePlanByIdOrFirst(planId) {
-  const plan = await getPlanById(planId);
-  if (plan) return plan;
+  const tried = await getPlanById(planId);
+  if (tried) return tried;
 
-  // Se não achou o id, tenta listar 1 plano ativo
-  const { col } = await getPlansColumns();
+  const { col, set } = await getPlansColumns();
+  if (!set || set.size === 0) return null; // sem tabela
+
   const colsSel = buildSelectCols(col);
-  const whereActive = col.isActive ? `WHERE \`${col.isActive}\`=1` : '';
+  const whereActive = col.isActive ? `WHERE \`${col.isActive}\` = 1` : '';
   const order = col.name ? `ORDER BY \`${col.name}\` ASC` : '';
   const [rows] = await sequelize.query(`SELECT ${colsSel} FROM \`plans\` ${whereActive} ${order} LIMIT 1`);
   if (rows && rows.length) return normalizePlanRow(rows[0], col);
@@ -111,32 +171,33 @@ async function getAnyActivePlanByIdOrFirst(planId) {
 
 function calculateEndDate(durationType, durationValue) {
   const now = new Date();
-  if (durationType === 'days') now.setDate(now.getDate() + Number(durationValue || 0));
-  else if (durationType === 'months') now.setMonth(now.getMonth() + Number(durationValue || 0));
-  else if (durationType === 'years') now.setFullYear(now.getFullYear() + Number(durationValue || 0));
+  const val = Number(durationValue || 0);
+  if (durationType === 'days') now.setDate(now.getDate() + val);
+  else if (durationType === 'months') now.setMonth(now.getMonth() + val);
+  else if (durationType === 'years') now.setFullYear(now.getFullYear() + val);
+  else now.setMonth(now.getMonth() + val); // default months
   return now;
 }
 
-/** =========================================================
+/* =======
  * ROTAS
- * ========================================================= */
+ * ======= */
 
-/**
- * GET /api/subscriptions
- * Retorna assinatura do usuário (e detalhes do plano normalizados)
- */
+// GET /api/subscriptions — retorna assinatura + info do plano
 router.get('/', authenticate, async (req, res) => {
   try {
-    const userId = req.user.userId;
+    const userId = req.userId; // ✅ middleware define req.userId
+    if (!userId) return res.status(401).json({ error: 'Token inválido' });
 
-    // Busca assinatura
+    // Assinatura existente?
     let subscription = await db.Subscription.findOne({ where: { userId } });
 
-    // Se não existir, cria trial se houver plano 'trial'
+    // Se não existir, tenta criar trial (ou primeiro plano ativo)
     if (!subscription) {
-      const trial = await getAnyActivePlanByIdOrFirst('trial');
-      if (!trial) {
-        // não há planos na tabela; retorna assinatura "vazia"
+      const trialOrFirst = (await getAnyActivePlanByIdOrFirst('trial')) || (await getAnyActivePlanByIdOrFirst(null));
+
+      if (!trialOrFirst) {
+        // Sem tabela 'plans' ou sem planos → retorna assinatura "vazia"
         return res.json({
           plan: 'trial',
           status: 'inactive',
@@ -150,19 +211,22 @@ router.get('/', authenticate, async (req, res) => {
 
       subscription = await db.Subscription.create({
         userId,
-        plan: trial.id,
+        plan: trialOrFirst.id,
         status: 'active',
         startDate: new Date(),
-        endDate: calculateEndDate(trial.durationType, trial.durationValue),
-        analysisLimit: trial.analysisLimit,
+        endDate: calculateEndDate(trialOrFirst.durationType, trialOrFirst.durationValue),
+        analysisLimit: trialOrFirst.analysisLimit,
         analysisUsed: 0
       });
     }
 
-    // Carrega detalhes do plano sem usar associação (evita erro de colunas)
-    const planDetails = await getAnyActivePlanByIdOrFirst(subscription.plan);
+    // Carrega detalhes do plano (se houver tabela/linha correspondente)
+    const planDetails =
+      (await getPlanById(subscription.plan)) ||
+      (await getAnyActivePlanByIdOrFirst(subscription.plan)) ||
+      null;
 
-    res.json({
+    return res.json({
       id: subscription.id,
       plan: subscription.plan,
       status: subscription.status,
@@ -173,20 +237,19 @@ router.get('/', authenticate, async (req, res) => {
       planDetails
     });
   } catch (error) {
-    console.error('Error loading subscription:', error);
-    res.status(500).json({ error: 'Erro ao carregar assinatura' });
+    console.error('Error loading subscription:', error?.message || error);
+    return res.status(500).json({ error: 'Erro ao carregar assinatura' });
   }
 });
 
-/**
- * POST /api/subscriptions/upgrade
- * Atualiza assinatura para o plano informado (lendo o plano do banco)
- * Body: { plan: "monthly" }
- */
+// POST /api/subscriptions/upgrade — troca de plano
 router.post('/upgrade', authenticate, async (req, res) => {
   try {
-    const userId = req.user.userId;
-    const planId = req.body.plan;
+    const userId = req.userId;
+    if (!userId) return res.status(401).json({ error: 'Token inválido' });
+
+    const planId = String(req.body?.plan || '').trim();
+    if (!planId) return res.status(400).json({ error: 'Plano não informado' });
 
     const plan = await getPlanById(planId);
     if (!plan) return res.status(400).json({ error: 'Plano inválido' });
@@ -210,13 +273,14 @@ router.post('/upgrade', authenticate, async (req, res) => {
         status: 'active',
         endDate,
         analysisLimit: plan.analysisLimit,
+        // se aumentou o limite, zera o usado (opcional — regra de negócio sua)
         analysisUsed: (plan.analysisLimit > (subscription.analysisLimit || 0)) ? 0 : subscription.analysisUsed
       });
     }
 
     const planDetails = await getPlanById(plan.id);
 
-    res.json({
+    return res.json({
       success: true,
       message: 'Plano atualizado com sucesso',
       subscription: {
@@ -231,24 +295,23 @@ router.post('/upgrade', authenticate, async (req, res) => {
       }
     });
   } catch (error) {
-    console.error('Error upgrading plan:', error);
-    res.status(500).json({ error: 'Erro ao atualizar plano' });
+    console.error('Error upgrading plan:', error?.message || error);
+    return res.status(500).json({ error: 'Erro ao atualizar plano' });
   }
 });
 
-/**
- * POST /api/subscriptions/cancel
- * Cancela a assinatura (mantém ativa até o fim do período)
- */
+// POST /api/subscriptions/cancel — cancela (mantém até endDate)
 router.post('/cancel', authenticate, async (req, res) => {
   try {
-    const userId = req.user.userId;
+    const userId = req.userId;
+    if (!userId) return res.status(401).json({ error: 'Token inválido' });
+
     const subscription = await db.Subscription.findOne({ where: { userId } });
     if (!subscription) return res.status(404).json({ error: 'Assinatura não encontrada' });
 
     await subscription.update({ status: 'cancelled' });
 
-    res.json({
+    return res.json({
       success: true,
       message: 'Assinatura cancelada com sucesso',
       subscription: {
@@ -259,8 +322,8 @@ router.post('/cancel', authenticate, async (req, res) => {
       }
     });
   } catch (error) {
-    console.error('Error cancelling subscription:', error);
-    res.status(500).json({ error: 'Erro ao cancelar assinatura' });
+    console.error('Error cancelling subscription:', error?.message || error);
+    return res.status(500).json({ error: 'Erro ao cancelar assinatura' });
   }
 });
 
