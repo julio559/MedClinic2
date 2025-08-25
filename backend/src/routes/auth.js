@@ -1,4 +1,3 @@
-// backend/src/routes/auth.js
 const express = require('express');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
@@ -49,10 +48,12 @@ router.post('/register', async (req, res) => {
   try {
     const data = await registerSchema.validateAsync(req.body, { abortEarly: false });
 
-    // evitar duplicidade explícita (além do unique do banco)
+    const email = String(data.email).trim().toLowerCase();
+    const crm = String(data.crm).trim();
+
     const [existingEmail, existingCrm] = await Promise.all([
-      User.findOne({ where: { email: String(data.email).trim().toLowerCase() } }),
-      User.findOne({ where: { crm: String(data.crm).trim() } }),
+      User.findOne({ where: { email } }),
+      User.findOne({ where: { crm } }),
     ]);
     if (existingEmail) return res.status(400).json({ error: 'E-mail já está em uso' });
     if (existingCrm)   return res.status(400).json({ error: 'CRM já está em uso' });
@@ -61,21 +62,18 @@ router.post('/register', async (req, res) => {
 
     const user = await User.create({
       name: String(data.name).trim(),
-      email: String(data.email).trim().toLowerCase(),
-      passwordHash, // mapeia para a coluna 'password' via field no model
+      email,
+      passwordHash, // -> coluna 'password' no DB
       phone: data.phone ? String(data.phone).trim() : null,
-      crm: String(data.crm).trim(),
+      crm,
       specialty: data.specialty ? String(data.specialty).trim() : null,
       avatar: data.avatar || null,
       isActive: true
     });
 
-    // ✔ retorna 200 (alguns fronts só tratam 200)
+    // 200 para agradar front que só trata 200 como sucesso
     const token = signToken(user.id);
-    return res.status(200).json({
-      token,
-      user: toSafeUser(user)
-    });
+    return res.status(200).json({ token, user: toSafeUser(user) });
   } catch (err) {
     if (err.isJoi) {
       return res.status(400).json({ error: 'Dados inválidos', details: err.details.map(d => d.message) });
@@ -89,15 +87,10 @@ router.post('/register', async (req, res) => {
       return res.status(400).json({ error: `Valor já cadastrado para ${field}` });
     }
 
-    // Log detalhado para Cloud Run/Logging
     console.error('Auth register error:', {
-      name: err?.name,
-      message: err?.message,
-      errors: err?.errors,
-      fields: err?.fields,
-      stack: err?.stack
+      name: err?.name, message: err?.message,
+      errors: err?.errors, fields: err?.fields, stack: err?.stack
     });
-
     return res.status(500).json({ error: 'Erro ao registrar usuário' });
   }
 });
@@ -106,7 +99,9 @@ router.post('/register', async (req, res) => {
 router.post('/login', async (req, res) => {
   try {
     const data = await loginSchema.validateAsync(req.body, { abortEarly: false });
-    const user = await User.findOne({ where: { email: String(data.email).trim().toLowerCase() } });
+    const email = String(data.email).trim().toLowerCase();
+
+    const user = await User.findOne({ where: { email } });
     if (!user) return res.status(401).json({ error: 'Credenciais inválidas' });
 
     const ok = await bcrypt.compare(String(data.password), String(user.passwordHash));
@@ -115,10 +110,7 @@ router.post('/login', async (req, res) => {
     const token = signToken(user.id);
     await user.update({ lastLogin: new Date() });
 
-    return res.status(200).json({
-      token,
-      user: toSafeUser(user)
-    });
+    return res.status(200).json({ token, user: toSafeUser(user) });
   } catch (err) {
     if (err.isJoi) {
       return res.status(400).json({ error: 'Dados inválidos', details: err.details.map(d => d.message) });
@@ -129,13 +121,9 @@ router.post('/login', async (req, res) => {
     }
 
     console.error('Auth login error:', {
-      name: err?.name,
-      message: err?.message,
-      errors: err?.errors,
-      fields: err?.fields,
-      stack: err?.stack
+      name: err?.name, message: err?.message,
+      errors: err?.errors, fields: err?.fields, stack: err?.stack
     });
-
     return res.status(500).json({ error: 'Erro ao autenticar' });
   }
 });

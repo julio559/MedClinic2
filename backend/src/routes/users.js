@@ -3,7 +3,6 @@ const express = require('express');
 const bcrypt = require('bcryptjs');
 const { User, Patient, Analysis } = require('../models');
 
-// Compatível com export default OU export nomeado do middleware
 const authModule = require('../middleware/auth');
 const authenticate = authModule.authenticate || authModule;
 
@@ -27,14 +26,10 @@ function toSafeUser(user) {
 }
 
 function getUserId(req) {
-  // aceita req.userId (nosso middleware) OU req.user.userId (formato antigo)
   return req.userId || (req.user && req.user.userId) || null;
 }
 
-/**
- * GET /api/users/me
- * Retorna o usuário autenticado (seguro)
- */
+// GET /api/users/me
 router.get('/me', authenticate, async (req, res) => {
   try {
     const uid = getUserId(req);
@@ -49,10 +44,7 @@ router.get('/me', authenticate, async (req, res) => {
   }
 });
 
-/**
- * GET /api/users/profile
- * Alias de /me para compatibilidade com o app
- */
+// GET /api/users/profile (alias)
 router.get('/profile', authenticate, async (req, res) => {
   try {
     const uid = getUserId(req);
@@ -67,10 +59,7 @@ router.get('/profile', authenticate, async (req, res) => {
   }
 });
 
-/**
- * PUT /api/users/me
- * body: { name, email, crm, specialty, phone }
- */
+// PUT /api/users/me
 router.put('/me', authenticate, async (req, res) => {
   try {
     const uid = getUserId(req);
@@ -84,15 +73,14 @@ router.put('/me', authenticate, async (req, res) => {
       return res.status(400).json({ error: 'Nome e e-mail são obrigatórios' });
     }
 
-    // Se mudar e-mail, garanta unicidade
-    if (email !== user.email) {
-      const exists = await User.findOne({ where: { email: String(email).trim() } });
+    if (String(email).trim().toLowerCase() !== user.email) {
+      const exists = await User.findOne({ where: { email: String(email).trim().toLowerCase() } });
       if (exists) return res.status(400).json({ error: 'E-mail já está em uso' });
     }
 
     await user.update({
       name: String(name).trim(),
-      email: String(email).trim(),
+      email: String(email).trim().toLowerCase(),
       crm: crm ? String(crm).trim() : null,
       specialty: specialty ? String(specialty).trim() : null,
       phone: phone ? String(phone).trim() : null,
@@ -105,10 +93,7 @@ router.put('/me', authenticate, async (req, res) => {
   }
 });
 
-/**
- * POST /api/users/change-password
- * body: { currentPassword, newPassword }
- */
+// POST /api/users/change-password
 router.post('/change-password', authenticate, async (req, res) => {
   try {
     const uid = getUserId(req);
@@ -125,7 +110,6 @@ router.post('/change-password', authenticate, async (req, res) => {
     const user = await User.findByPk(uid);
     if (!user) return res.status(404).json({ error: 'Usuário não encontrado' });
 
-    // Compatível com modelos antigos (password) e novos (passwordHash)
     const currentHash = user.passwordHash ?? user.password ?? null;
     if (!currentHash) {
       return res.status(500).json({ error: 'Campo de senha não encontrado no usuário' });
@@ -148,58 +132,7 @@ router.post('/change-password', authenticate, async (req, res) => {
   }
 });
 
-// POST /api/users/register
-router.post('/register', async (req, res) => {
-  try {
-    const { name, email, password, phone, crm, specialty } = req.body || {};
-
-    if (!name || !email || !password || !crm) {
-      return res.status(400).json({ error: 'Nome, e-mail, senha e CRM são obrigatórios' });
-    }
-
-    // normaliza
-    const normEmail = String(email).trim().toLowerCase();
-    const normName  = String(name).trim();
-    const normCrm   = String(crm).trim();
-
-    // unicidade
-    const emailExists = await User.findOne({ where: { email: normEmail } });
-    if (emailExists) return res.status(400).json({ error: 'E-mail já está em uso' });
-    const crmExists = await User.findOne({ where: { crm: normCrm } });
-    if (crmExists) return res.status(400).json({ error: 'CRM já está em uso' });
-
-    // hash
-    const hash = await bcrypt.hash(String(password), 10);
-
-    // ATENÇÃO: salvar em passwordHash (mapeado para a coluna "password")
-    const user = await User.create({
-      name: normName,
-      email: normEmail,
-      passwordHash: hash,
-      phone: phone ? String(phone).trim() : null,
-      crm: normCrm,
-      specialty: specialty ? String(specialty).trim() : null,
-    });
-
-    return res.status(201).json(toSafeUser(user));
-  } catch (e) {
-    // ajuda a debugar a causa real
-    if (e.name === 'SequelizeValidationError' || e.name === 'SequelizeUniqueConstraintError') {
-      const msg = e.errors?.[0]?.message || 'Erro de validação';
-      console.error('POST /users/register validation', msg, e.errors);
-      return res.status(400).json({ error: msg });
-    }
-    console.error('POST /users/register error', e);
-    return res.status(500).json({ error: 'Erro ao registrar usuário' });
-  }
-});
-
-
-/**
- * GET /api/users/stats
- * Estatísticas do médico logado
- * { totalAnalyses, completedAnalyses, processingAnalyses, totalPatients }
- */
+// GET /api/users/stats
 router.get('/stats', authenticate, async (req, res) => {
   try {
     const doctorId = getUserId(req);
