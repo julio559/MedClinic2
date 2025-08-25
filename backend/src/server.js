@@ -1,4 +1,3 @@
-cat > backend/src/server.js <<'EOF'
 // backend/src/server.js
 const express = require('express');
 const cors = require('cors');
@@ -12,7 +11,15 @@ const util = require('util');
 require('dotenv').config();
 
 const db = require('./models');
-const { validateOpenAIConfig, testOpenAIConnection } = require('./services/aiService');
+
+// --- aiService com guard (se quebrar, não derruba o container) ---
+let validateOpenAIConfig = () => false;
+let testOpenAIConnection = async () => false;
+try {
+  ({ validateOpenAIConfig, testOpenAIConnection } = require('./services/aiService'));
+} catch (e) {
+  console.error('⚠️  aiService não pôde ser carregado (seguindo sem IA):', e?.message);
+}
 
 const app = express();
 const server = createServer(app);
@@ -97,29 +104,6 @@ app.get('/health', async (req, res) => {
     });
   } catch (e) {
     res.status(200).json({ status: 'DEGRADED', error: e.message });
-  }
-});
-
-// Test OpenAI
-app.get('/test-openai', async (req, res) => {
-  try {
-    const configured = validateOpenAIConfig();
-    if (!configured) {
-      return res.status(400).json({
-        error: 'OpenAI não configurada',
-        message: 'Configure OPENAI_API_KEY no arquivo .env',
-      });
-    }
-    const connected = await testOpenAIConnection();
-    if (!connected) {
-      return res.status(500).json({
-        error: 'Falha na conexão com OpenAI',
-        message: 'Verifique se a chave da API está correta e ativa',
-      });
-    }
-    res.json({ success: true, message: 'OpenAI configurada e funcionando!', timestamp: new Date().toISOString() });
-  } catch (error) {
-    res.status(500).json({ error: 'Erro ao testar OpenAI', details: error.message });
   }
 });
 
@@ -344,48 +328,52 @@ server.listen(PORT, '0.0.0.0', () => {
   console.log('=====================================\n');
 });
 
-// Inicialização do DB em background (não derruba o processo em caso de falha)
-(async () => {
-  try {
-    // 0) Autentica e diagnóstico
-    await db.sequelize.authenticate();
-    const baseDiag = await diagnoseDB(db.sequelize);
-    console.log('🗄️ MySQL versão:', baseDiag.version);
-    console.log('⚙️ sql_mode:', baseDiag.sql_mode);
-    console.log('🔎 Zero-dates (seguro):', baseDiag.zeroDates);
-
-    // 1) Limpeza zero-dates (tolerante a erro)
+// Inicialização do DB em background (skip opcional)
+if (process.env.SKIP_DB === '1') {
+  console.log('⏭️  SKIP_DB=1: pulando inicialização do banco');
+} else {
+  (async () => {
     try {
-      await preSyncCleanupZeroDates(db.sequelize);
-    } catch (e) {
-      console.log('(warn) Falha na limpeza de zero-dates (continuando):', e.message);
+      // 0) Autentica e diagnóstico
+      await db.sequelize.authenticate();
+      const baseDiag = await diagnoseDB(db.sequelize);
+      console.log('🗄️ MySQL versão:', baseDiag.version);
+      console.log('⚙️  sql_mode:', baseDiag.sql_mode);
+      console.log('🔎 Zero-dates (seguro):', baseDiag.zeroDates);
+
+      // 1) Limpeza zero-dates (tolerante a erro)
+      try {
+        await preSyncCleanupZeroDates(db.sequelize);
+      } catch (e) {
+        console.log('(warn) Falha na limpeza de zero-dates (continuando):', e.message);
+      }
+
+      // 2) Sync (opcional)
+      const ALTER = process.env.DB_SYNC_ALTER === '1';
+      await db.sequelize.sync({ force: false, alter: ALTER });
+
+      // 3) Ajustes defaults (opcional)
+      if (process.env.DB_FIX_TS_DEFAULTS === '1') {
+        const tables = ['users', 'patients', 'analyses', 'analysis_results', 'medical_images', 'subscriptions', 'plans'];
+        for (const t of tables) await ensureDatetimeDefaults(db.sequelize, t);
+      }
+
+      // 4) Teste OpenAI (não bloqueia startup)
+      console.log('🔍 Verificando configuração da OpenAI...');
+      const openaiConfigured = validateOpenAIConfig();
+      if (openaiConfigured) {
+        const openaiConnected = await testOpenAIConnection();
+        console.log(openaiConnected ? '✅ OpenAI totalmente funcional' : '⚠️  OpenAI com problemas de conexão');
+      } else {
+        console.log('⚠️  OpenAI não configurada - modo limitado');
+      }
+
+      console.log('✅ Bootstrap de DB concluído');
+    } catch (error) {
+      console.error('❌ Falha ao inicializar DB (server segue de pé):', error?.message);
     }
-
-    // 2) Sync (opcional)
-    const ALTER = process.env.DB_SYNC_ALTER === '1';
-    await db.sequelize.sync({ force: false, alter: ALTER });
-
-    // 3) Ajustes defaults (opcional)
-    if (process.env.DB_FIX_TS_DEFAULTS === '1') {
-      const tables = ['users', 'patients', 'analyses', 'analysis_results', 'medical_images', 'subscriptions', 'plans'];
-      for (const t of tables) await ensureDatetimeDefaults(db.sequelize, t);
-    }
-
-    // 4) Teste OpenAI (não bloqueia startup)
-    console.log('🔍 Verificando configuração da OpenAI...');
-    const openaiConfigured = validateOpenAIConfig();
-    if (openaiConfigured) {
-      const openaiConnected = await testOpenAIConnection();
-      console.log(openaiConnected ? '✅ OpenAI totalmente funcional' : '⚠️ OpenAI com problemas de conexão');
-    } else {
-      console.log('⚠️ OpenAI não configurada - modo limitado');
-    }
-
-    console.log('✅ Bootstrap de DB concluído');
-  } catch (error) {
-    console.error('❌ Falha ao inicializar DB (server segue de pé):', error?.message);
-  }
-})();
+  })();
+}
 
 // Captura erros não tratados
 process.on('unhandledRejection', (reason, p) => {
