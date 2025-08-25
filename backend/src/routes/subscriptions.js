@@ -169,7 +169,9 @@ router.get('/', authenticate, async (req, res) => {
         });
       }
 
+      // 👇 FORÇA ID (UUID) no INSERT para evitar "id doesn't have a default value"
       subscription = await db.Subscription.create({
+        id: uuidv4(),
         userId,
         plan: plan.id,
         status: 'active',
@@ -220,7 +222,9 @@ router.post('/upgrade', authenticate, async (req, res) => {
     const endDate = calculateEndDate(plan.durationType, plan.durationValue);
 
     if (!subscription) {
+      // 👇 FORÇA ID (UUID) no INSERT
       subscription = await db.Subscription.create({
+        id: uuidv4(),
         userId,
         plan: plan.id,
         status: 'active',
