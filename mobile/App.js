@@ -1,10 +1,15 @@
 // App.js
 import React from 'react';
+import { View, ActivityIndicator, StatusBar } from 'react-native';
 import { NavigationContainer } from '@react-navigation/native';
 import { createStackNavigator } from '@react-navigation/stack';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import Icon from 'react-native-vector-icons/MaterialIcons';
 
+import { AuthProvider, useAuth } from './src/context/AuthContext';
+import API_CONFIG from './config/api';
+
+// TELAS
 import LoginScreen from './src/screens/LoginScreen';
 import RegisterScreen from './src/screens/RegisterScreen';
 import HomeScreen from './src/screens/HomeScreen';
@@ -17,21 +22,24 @@ import AnalysisResultScreen from './src/screens/AnalysisResultScreen';
 import AnalysisWaitScreen from './src/screens/AnalysisWaitScreen';
 import ProfileScreen from './src/screens/ProfileScreen';
 
-import { AuthProvider, useAuth } from './src/context/AuthContext';
-
 const Stack = createStackNavigator();
 const Tab = createBottomTabNavigator();
 
-const API_BASE = process.env.EXPO_PUBLIC_API_BASE || 'http://localhost:3001';
+function Loading() {
+  return (
+    <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: '#fff' }}>
+      <StatusBar barStyle="dark-content" />
+      <ActivityIndicator size="large" />
+    </View>
+  );
+}
 
 const TabNavigator = () => (
   <Tab.Navigator
-    // mesma ordem de antes
     initialRouteName="Home"
     screenOptions={({ route }) => ({
-      // mesmos ícones de antes
-      tabBarIcon: ({ color, size }) => {
-        let iconName;
+      tabBarIcon: ({ color }) => {
+        let iconName = 'home';
         if (route.name === 'Home') iconName = 'home';
         else if (route.name === 'History') iconName = 'history';
         else if (route.name === 'Patients') iconName = 'people';
@@ -39,7 +47,7 @@ const TabNavigator = () => (
         else if (route.name === 'Profile') iconName = 'person';
         return <Icon name={iconName} size={24} color={color} />;
       },
-      // UX (estilo) aprimorado — sem mudar nomes/ícones/ordem
+      headerShown: false,
       tabBarStyle: {
         backgroundColor: '#F8FBFF',
         borderTopColor: '#E5EAF5',
@@ -51,12 +59,10 @@ const TabNavigator = () => (
         fontSize: 14,
         fontWeight: '500',
       },
-      tabBarActiveTintColor: '#111827',   // item ativo mais escuro
-      tabBarInactiveTintColor: '#3B4F8B', // inativos azul suave
-      headerShown: false,
+      tabBarActiveTintColor: '#111827',
+      tabBarInactiveTintColor: '#3B4F8B',
     })}
   >
-    {/* mesmos nomes/títulos e mesma sequência */}
     <Tab.Screen name="Home" component={HomeScreen} options={{ title: '' }} />
     <Tab.Screen name="History" component={HistoryScreen} options={{ title: '' }} />
     <Tab.Screen name="Patients" component={PatientsScreen} options={{ title: '' }} />
@@ -67,46 +73,58 @@ const TabNavigator = () => (
 
 const AppNavigator = () => {
   const { user, loading } = useAuth();
-  if (loading) return null;
+
+  if (loading) return <Loading />;
 
   return (
-    <NavigationContainer>
-      <Stack.Navigator screenOptions={{ headerShown: false }}>
-        {user ? (
-          <>
-            <Stack.Screen name="Main" component={TabNavigator} />
+    <Stack.Navigator screenOptions={{ headerShown: false }}>
+      {user ? (
+        <>
+          {/* Stack privada (logado) */}
+          <Stack.Screen name="Main" component={TabNavigator} />
 
-            {/* Pacientes */}
-            <Stack.Screen name="PatientConditions" component={PatientConditionsScreen} />
-            <Stack.Screen name="PatientDetail" component={PatientDetailScreen} />
+          {/* Pacientes */}
+          <Stack.Screen name="PatientConditions" component={PatientConditionsScreen} />
+          <Stack.Screen name="PatientDetail" component={PatientDetailScreen} />
 
-            {/* Espera da IA */}
-            <Stack.Screen name="AnalysisWait" options={{ headerShown: true, title: 'Processando análise...' }}>
-              {props => <AnalysisWaitScreen {...props} apiBase={API_BASE} />}
-            </Stack.Screen>
+          {/* Espera da IA — passamos a base/URL da API do config, sem hardcode */}
+          <Stack.Screen
+            name="AnalysisWait"
+            options={{ headerShown: true, title: 'Processando análise...' }}
+          >
+            {(props) => (
+              <AnalysisWaitScreen
+                {...props}
+                apiBase={API_CONFIG.baseURL}
+                apiUrl={API_CONFIG.apiURL}
+              />
+            )}
+          </Stack.Screen>
 
-            {/* Resultados */}
-            <Stack.Screen
-              name="AnalysisResult"
-              component={AnalysisResultScreen}
-              options={{ headerShown: true, title: 'Resultados' }}
-            />
-          </>
-        ) : (
-          <>
-            <Stack.Screen name="Login" component={LoginScreen} />
-            <Stack.Screen name="Register" component={RegisterScreen} />
-          </>
-        )}
-      </Stack.Navigator>
-    </NavigationContainer>
+          {/* Resultados */}
+          <Stack.Screen
+            name="AnalysisResult"
+            component={AnalysisResultScreen}
+            options={{ headerShown: true, title: 'Resultados' }}
+          />
+        </>
+      ) : (
+        <>
+          {/* Auth stack (não logado) */}
+          <Stack.Screen name="Login" component={LoginScreen} />
+          <Stack.Screen name="Register" component={RegisterScreen} />
+        </>
+      )}
+    </Stack.Navigator>
   );
 };
 
 export default function App() {
   return (
     <AuthProvider>
-      <AppNavigator />
+      <NavigationContainer>
+        <AppNavigator />
+      </NavigationContainer>
     </AuthProvider>
   );
 }
