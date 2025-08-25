@@ -1,3 +1,4 @@
+cat > backend/src/server.js <<'EOF'
 // backend/src/server.js
 const express = require('express');
 const cors = require('cors');
@@ -16,26 +17,27 @@ const { validateOpenAIConfig, testOpenAIConnection } = require('./services/aiSer
 const app = express();
 const server = createServer(app);
 const io = new Server(server, {
-  cors: { origin: "*", methods: ["GET", "POST", "PUT", "DELETE"] }
+  cors: { origin: '*', methods: ['GET', 'POST', 'PUT', 'DELETE'] },
 });
 
-// Disponibiliza o IO globalmente (para uso no aiService, etc.)
+// IO global
 global.socketIO = io;
 
-// Verificar e criar diretório de uploads
+// Upload dir (ephemeral no Cloud Run)
 const uploadDir = path.join(__dirname, 'uploads/medical-images');
 if (!fs.existsSync(uploadDir)) {
   fs.mkdirSync(uploadDir, { recursive: true });
   console.log('📁 Diretório de uploads criado:', uploadDir);
 }
 
-// Middleware
+// Middlewares
+app.set('trust proxy', 1);
 app.use(helmet());
 app.use(cors());
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
-// Servir arquivos estáticos (uploads)
+// Estáticos
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 
 // Rotas
@@ -53,49 +55,66 @@ app.use('/api/analysis', analysisRoutes);
 app.use('/api/subscriptions', subscriptionRoutes);
 app.use('/api/plans', plansRoutes);
 
-// Health check
+// Health check (não bloqueante)
 app.get('/health', async (req, res) => {
-  const openaiConfigured = validateOpenAIConfig();
-  let openaiConnection = false;
-  if (openaiConfigured) openaiConnection = await testOpenAIConnection();
-
-  res.json({
-    status: 'OK',
-    message: 'Medical AI Backend funcionando!',
-    database: 'MySQL conectado',
-    openai: {
-      configured: openaiConfigured,
-      connection: openaiConnection,
-      status: openaiConfigured && openaiConnection ? 'Funcionando' : 'Configuração necessária'
-    },
-    timestamp: new Date().toISOString(),
-    version: '2.0.0',
-    endpoints: {
-      auth: '/api/auth',
-      users: '/api/users',
-      patients: '/api/patients',
-      analysis: '/api/analysis',
-      subscriptions: '/api/subscriptions',
-      plans: '/api/plans'
+  try {
+    const openaiConfigured = validateOpenAIConfig();
+    let openaiConnection = false;
+    if (openaiConfigured) {
+      openaiConnection = await Promise.race([
+        testOpenAIConnection().catch(() => false),
+        new Promise((r) => setTimeout(() => r(false), 2000)),
+      ]);
     }
-  });
+
+    let dbStatus = 'desconhecido';
+    try {
+      await db.sequelize.query('SELECT 1');
+      dbStatus = 'ok';
+    } catch {
+      dbStatus = 'falhou';
+    }
+
+    res.json({
+      status: 'OK',
+      message: 'Medical AI Backend funcionando!',
+      database: dbStatus,
+      openai: {
+        configured: openaiConfigured,
+        connection: openaiConnection,
+        status: openaiConfigured && openaiConnection ? 'Funcionando' : 'Configuração necessária',
+      },
+      timestamp: new Date().toISOString(),
+      version: '2.0.0',
+      endpoints: {
+        auth: '/api/auth',
+        users: '/api/users',
+        patients: '/api/patients',
+        analysis: '/api/analysis',
+        subscriptions: '/api/subscriptions',
+        plans: '/api/plans',
+      },
+    });
+  } catch (e) {
+    res.status(200).json({ status: 'DEGRADED', error: e.message });
+  }
 });
 
-// Teste OpenAI
+// Test OpenAI
 app.get('/test-openai', async (req, res) => {
   try {
     const configured = validateOpenAIConfig();
     if (!configured) {
       return res.status(400).json({
         error: 'OpenAI não configurada',
-        message: 'Configure OPENAI_API_KEY no arquivo .env'
+        message: 'Configure OPENAI_API_KEY no arquivo .env',
       });
     }
     const connected = await testOpenAIConnection();
     if (!connected) {
       return res.status(500).json({
         error: 'Falha na conexão com OpenAI',
-        message: 'Verifique se a chave da API está correta e ativa'
+        message: 'Verifique se a chave da API está correta e ativa',
       });
     }
     res.json({ success: true, message: 'OpenAI configurada e funcionando!', timestamp: new Date().toISOString() });
@@ -116,16 +135,14 @@ app.get('/test', (req, res) => {
       'POST /api/auth/register',
       'GET /api/patients',
       'POST /api/analysis',
-      'GET /api/analysis'
-    ]
+      'GET /api/analysis',
+    ],
   });
 });
 
 const isDev = (process.env.NODE_ENV || 'development') !== 'production';
 
-/** ---------- Diagnósticos e utilitários de DB ---------- */
-
-/** Checa se coluna existe via INFORMATION_SCHEMA */
+/** ---------- Auxiliares de diagnóstico DB ---------- */
 async function hasColumn(sequelize, table, column) {
   const [rows] = await sequelize.query(
     `SELECT COUNT(*) as c
@@ -139,7 +156,6 @@ async function hasColumn(sequelize, table, column) {
   return Number(c || 0) > 0;
 }
 
-/** Remove temporariamente NO_ZERO_DATE/NO_ZERO_IN_DATE desta sessão */
 async function relaxStrictZeroDate(sequelize) {
   const [[row]] = await sequelize.query(`SELECT @@SESSION.sql_mode AS mode`);
   const oldMode = row?.mode || '';
@@ -151,7 +167,6 @@ async function relaxStrictZeroDate(sequelize) {
   return { oldMode, newMode };
 }
 
-/** Restaura sql_mode da sessão */
 async function restoreSqlMode(sequelize, oldMode) {
   try {
     await sequelize.query(`SET SESSION sql_mode = ?`, { replacements: [oldMode] });
@@ -160,11 +175,9 @@ async function restoreSqlMode(sequelize, oldMode) {
   }
 }
 
-/** Corrige zero-dates tabela/colunas com CAST para evitar erro em STRICT */
 async function fixZeroDatesInTable(sequelize, table) {
   const hasCreated = await hasColumn(sequelize, table, 'createdAt').catch(() => false);
   const hasUpdated = await hasColumn(sequelize, table, 'updatedAt').catch(() => false);
-
   if (!hasCreated && !hasUpdated) {
     console.log(`(info) ${table}: sem createdAt/updatedAt — ignorado`);
     return;
@@ -201,7 +214,6 @@ async function fixZeroDatesInTable(sequelize, table) {
   }
 }
 
-/** Ajusta defaults DATETIME (opcional via ENV) */
 async function ensureDatetimeDefaults(sequelize, table) {
   const hasCreated = await hasColumn(sequelize, table, 'createdAt').catch(() => false);
   const hasUpdated = await hasColumn(sequelize, table, 'updatedAt').catch(() => false);
@@ -210,16 +222,15 @@ async function ensureDatetimeDefaults(sequelize, table) {
   try {
     await sequelize.query(
       `ALTER TABLE \`${table}\`
-         ${hasCreated ? "MODIFY `createdAt` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP" : ""}
-         ${hasCreated && hasUpdated ? "," : ""}
-         ${hasUpdated ? "MODIFY `updatedAt` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP" : ""}`
+         ${hasCreated ? 'MODIFY `createdAt` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP' : ''}
+         ${hasCreated && hasUpdated ? ',' : ''}
+         ${hasUpdated ? 'MODIFY `updatedAt` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP' : ''}`
     );
   } catch (e) {
     console.log(`(info) Ajuste default datetime: ${table} -> ignorado (${e.message})`);
   }
 }
 
-/** Conta zero-dates de forma segura (CAST) */
 async function countZeroDates(sequelize, table) {
   const hasCreated = await hasColumn(sequelize, table, 'createdAt').catch(() => false);
   const hasUpdated = await hasColumn(sequelize, table, 'updatedAt').catch(() => false);
@@ -227,9 +238,9 @@ async function countZeroDates(sequelize, table) {
 
   const [rows] = await sequelize.query(
     `SELECT SUM(
-       ${hasCreated ? "CAST(CAST(`createdAt` AS CHAR) = '0000-00-00 00:00:00' AS UNSIGNED)" : "0"}
-       ${hasCreated && hasUpdated ? " + " : ""}
-       ${hasUpdated ? "CAST(CAST(`updatedAt` AS CHAR) = '0000-00-00 00:00:00' AS UNSIGNED)" : "0"}
+       ${hasCreated ? "CAST(CAST(`createdAt` AS CHAR) = '0000-00-00 00:00:00' AS UNSIGNED)" : '0'}
+       ${hasCreated && hasUpdated ? ' + ' : ''}
+       ${hasUpdated ? "CAST(CAST(`updatedAt` AS CHAR) = '0000-00-00 00:00:00' AS UNSIGNED)" : '0'}
      ) AS zeros
      FROM \`${table}\``
   );
@@ -237,7 +248,6 @@ async function countZeroDates(sequelize, table) {
   return { table, zeros };
 }
 
-/** Diagnóstico do banco (versão, sql_mode, zero-dates) */
 async function diagnoseDB(sequelize) {
   const [[{ version }]] = await sequelize.query(`SELECT VERSION() AS version`);
   const [[{ mode }]] = await sequelize.query(`SELECT @@SESSION.sql_mode AS mode`);
@@ -254,23 +264,14 @@ async function diagnoseDB(sequelize) {
   return { version, sql_mode: mode, zeroDates: zeroReports };
 }
 
-/** Corrige zero-dates em todas as tabelas conhecidas */
 async function preSyncCleanupZeroDates(sequelize) {
-  const tables = [
-    'users',
-    'patients',
-    'analyses',
-    'analysis_results',
-    'medical_images',
-    'subscriptions',
-    'plans'
-  ];
+  const tables = ['users', 'patients', 'analyses', 'analysis_results', 'medical_images', 'subscriptions', 'plans'];
   for (const t of tables) {
     await fixZeroDatesInTable(sequelize, t);
   }
 }
 
-/** Rota de diagnóstico interna (apenas dev) */
+// Diag interno (apenas em dev)
 if (isDev) {
   app.get('/_diag/db', async (req, res) => {
     try {
@@ -284,20 +285,16 @@ if (isDev) {
 
 /** ---------- Fim diagnósticos ---------- */
 
-// Erro global (resposta detalhada em dev)
+// Erro global
 app.use((error, req, res, next) => {
-  const payload = {
-    error: 'Erro interno do servidor',
-  };
+  const payload = { error: 'Erro interno do servidor' };
 
   if (isDev) {
     payload.meta = {
       name: error?.name,
       message: error?.message,
-      stack: (error && error.stack) || undefined,
+      stack: error?.stack,
     };
-
-    // Enriquecer com detalhes de Sequelize, se houver
     if (error?.original) {
       payload.meta.original = {
         message: error.original.message,
@@ -320,7 +317,7 @@ app.use('*', (req, res) => {
   res.status(404).json({
     error: 'Rota não encontrada',
     path: req.originalUrl,
-    availableEndpoints: ['GET /health', 'GET /test-openai', 'POST /api/auth/login', 'POST /api/auth/register', 'GET /api/patients', 'POST /api/analysis', 'GET /api/analysis']
+    availableEndpoints: ['GET /health', 'GET /test-openai', 'POST /api/auth/login', 'POST /api/auth/register', 'GET /api/patients', 'POST /api/analysis', 'GET /api/analysis'],
   });
 });
 
@@ -338,106 +335,57 @@ io.on('connection', (socket) => {
   socket.on('disconnect', () => console.log('👨‍⚕️ Doctor disconnected:', socket.id));
 });
 
-const PORT = process.env.PORT || 8080;
+// --- Cloud Run/Containers: escute a porta ANTES de tocar no DB ---
+const PORT = parseInt(process.env.PORT || '8080', 10);
+server.listen(PORT, '0.0.0.0', () => {
+  console.log('=====================================');
+  console.log('🚀 Server rodando na porta', PORT);
+  console.log('📊 Health check: /health');
+  console.log('=====================================\n');
+});
 
-/** Bootstrap */
-async function bootstrap() {
+// Inicialização do DB em background (não derruba o processo em caso de falha)
+(async () => {
   try {
-    // 0) Autentica para garantir conexão (log vers/ modo SQL)
+    // 0) Autentica e diagnóstico
     await db.sequelize.authenticate();
     const baseDiag = await diagnoseDB(db.sequelize);
     console.log('🗄️ MySQL versão:', baseDiag.version);
-    console.log('⚙️  sql_mode:', baseDiag.sql_mode);
+    console.log('⚙️ sql_mode:', baseDiag.sql_mode);
     console.log('🔎 Zero-dates (seguro):', baseDiag.zeroDates);
 
-    // 1) Corrige zero-dates antes do sync (tolerante a erro)
+    // 1) Limpeza zero-dates (tolerante a erro)
     try {
       await preSyncCleanupZeroDates(db.sequelize);
     } catch (e) {
       console.log('(warn) Falha na limpeza de zero-dates (continuando):', e.message);
     }
 
-    // 2) OPCIONAL: permitir ALTER via env
+    // 2) Sync (opcional)
     const ALTER = process.env.DB_SYNC_ALTER === '1';
     await db.sequelize.sync({ force: false, alter: ALTER });
 
-    // 3) OPCIONAL: forçar defaults saudáveis em DATETIME via env
+    // 3) Ajustes defaults (opcional)
     if (process.env.DB_FIX_TS_DEFAULTS === '1') {
-      const tables = ['users','patients','analyses','analysis_results','medical_images','subscriptions','plans'];
+      const tables = ['users', 'patients', 'analyses', 'analysis_results', 'medical_images', 'subscriptions', 'plans'];
       for (const t of tables) await ensureDatetimeDefaults(db.sequelize, t);
     }
 
-    // 4) Teste OpenAI
+    // 4) Teste OpenAI (não bloqueia startup)
     console.log('🔍 Verificando configuração da OpenAI...');
     const openaiConfigured = validateOpenAIConfig();
     if (openaiConfigured) {
       const openaiConnected = await testOpenAIConnection();
-      console.log(openaiConnected ? '✅ OpenAI totalmente funcional' : '⚠️  OpenAI configurada mas com problemas de conexão');
+      console.log(openaiConnected ? '✅ OpenAI totalmente funcional' : '⚠️ OpenAI com problemas de conexão');
     } else {
-      console.log('⚠️  OpenAI não configurada - sistema funcionará em modo limitado');
-      console.log('💡 Para usar IA real, adicione OPENAI_API_KEY no arquivo .env');
+      console.log('⚠️ OpenAI não configurada - modo limitado');
     }
 
-    // 5) Sobe servidor
-    server.listen(PORT, () => {
-      console.log('=====================================');
-      console.log('🚀 Server rodando na porta', PORT);
-      console.log('🗄️ MySQL conectado:', process.env.DB_NAME);
-      console.log('🤖 OpenAI:', openaiConfigured ? '✅ Configurada' : '❌ Não configurada');
-      console.log('📊 Health check: http://localhost:' + PORT + '/health');
-      if (isDev) console.log('🛠️  Diagnóstico DB: http://localhost:' + PORT + '/_diag/db');
-      console.log('🧪 Test OpenAI: http://localhost:' + PORT + '/test-openai');
-      console.log('🧪 Test: http://localhost:' + PORT + '/test');
-      console.log('📁 Upload dir:', uploadDir);
-      console.log('🔗 Socket.IO: Habilitado');
-      console.log('=====================================\n');
-
-      console.log('📋 Endpoints disponíveis:');
-      console.log('  Auth:');
-      console.log('    POST /api/auth/login');
-      console.log('    POST /api/auth/register');
-      console.log('  Patients:');
-      console.log('    GET /api/patients');
-      console.log('    POST /api/patients');
-      console.log('  Analysis:');
-      console.log('    GET /api/analysis');
-      console.log('    POST /api/analysis');
-      console.log('    GET /api/analysis/:id/results');
-      console.log('    GET /api/analysis/:id/status');
-      console.log('    POST /api/analysis/:id/reprocess');
-      console.log('  Subscriptions:');
-      console.log('    GET /api/subscriptions');
-      console.log('    POST /api/subscriptions/upgrade');
-      console.log('  Plans:');
-      console.log('    GET /api/plans');
-      console.log('=====================================\n');
-    });
+    console.log('✅ Bootstrap de DB concluído');
   } catch (error) {
-    // Erro de bootstrap mais detalhado
-    console.error('❌ Erro ao subir o servidor!');
-    console.error('Mensagem:', error?.message);
-    if (error?.original) {
-      console.error('Original.message:', error.original.message);
-      console.error('Original.code:', error.original.code);
-      console.error('Original.errno:', error.original.errno);
-      console.error('Original.sqlState:', error.original.sqlState);
-      console.error('Original.sqlMessage:', error.original.sqlMessage);
-    }
-    if (error?.sql) console.error('SQL:', error.sql);
-    console.error('Stack:', error?.stack);
-
-    // Se falhar por zero-date, dica rápida:
-    if (String(error?.message).includes('Incorrect datetime value')) {
-      console.error('💡 Dica: há valores "0000-00-00 00:00:00" no seu banco. ');
-      console.error('   Rode a limpeza segura (CAST) ou ative DB_SYNC_ALTER/DB_FIX_TS_DEFAULTS se precisar ajustar schema.');
-      if (isDev) console.error('   Rota de diagnóstico (dev): GET /_diag/db');
-    }
-
-    process.exit(1);
+    console.error('❌ Falha ao inicializar DB (server segue de pé):', error?.message);
   }
-}
-
-bootstrap();
+})();
 
 // Captura erros não tratados
 process.on('unhandledRejection', (reason, p) => {
@@ -448,3 +396,4 @@ process.on('uncaughtException', (err) => {
 });
 
 module.exports = app;
+EOF
