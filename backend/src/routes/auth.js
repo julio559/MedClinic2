@@ -63,22 +63,42 @@ router.post('/register', async (req, res) => {
         avatar: user.avatar
       }
     });
-  } catch (err) {
-    if (err.isJoi) {
-      return res.status(400).json({ error: 'Dados inválidos', details: err.details.map(d => d.message) });
-    }
-    if (String(err.message).includes('JWT_SECRET')) {
-      console.error('Auth register error:', err.message);
-      return res.status(500).json({ error: 'Configuração do servidor ausente (JWT_SECRET)' });
-    }
-    // Captura de erros de unique no Sequelize
-    if (err?.name === 'SequelizeUniqueConstraintError') {
-      const field = err.errors?.[0]?.path || 'campo único';
-      return res.status(409).json({ error: `Valor já cadastrado para ${field}` });
-    }
-    console.error('Auth register error:', err);
-    return res.status(500).json({ error: 'Erro ao registrar usuário' });
+ } catch (err) {
+  if (err.isJoi) {
+    return res.status(400).json({ error: 'Dados inválidos', details: err.details.map(d => d.message) });
   }
+  if (String(err.message).includes('JWT_SECRET')) {
+    console.error('Auth register error:', err.message);
+    return res.status(500).json({ error: 'Configuração do servidor ausente (JWT_SECRET)' });
+  }
+  if (err?.name === 'SequelizeUniqueConstraintError') {
+    const field = err.errors?.[0]?.path || 'campo único';
+    return res.status(409).json({ error: `Valor já cadastrado para ${field}` });
+  }
+
+  // 🔥 Aqui o log detalhado
+  console.error('Auth register error:', {
+    name: err?.name,
+    message: err?.message,
+    errors: err?.errors,
+    fields: err?.fields,
+    stack: err?.stack
+  });
+
+  return res.status(500).json({
+    error: 'Erro ao registrar usuário',
+    details: {
+      name: err?.name,
+      message: err?.message,
+      fields: err?.fields,
+      errors: err?.errors?.map(e => ({
+        message: e.message,
+        path: e.path,
+        value: e.value
+      }))
+    }
+  });
+}
 });
 
 router.post('/login', async (req, res) => {
