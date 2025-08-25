@@ -2,143 +2,119 @@
 const express = require('express');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
-const { User, Subscription } = require('../models');
-// Se tiver um middleware de validação, mantenha. Caso não, pode remover esta linha.
-// const { validateAuth } = require('../middleware/validation');
+const Joi = require('joi');
+const { User } = require('../models');
 
 const router = express.Router();
 
-const JWT_SECRET = process.env.JWT_SECRET;
+const registerSchema = Joi.object({
+  name: Joi.string().min(2).required(),
+  email: Joi.string().email().required(),
+  password: Joi.string().min(6).required(),
+  phone: Joi.string().allow('', null),
+  crm: Joi.string().min(2).required(),
+  specialty: Joi.string().allow('', null),
+  avatar: Joi.string().allow('', null)
+});
 
-// Helper: remove campos sensíveis
-function safeUser(u) {
-  if (!u) return null;
-  return {
-    id: u.id,
-    name: u.name,
-    email: u.email,
-    phone: u.phone || null,
-    crm: u.crm || null,
-    specialty: u.specialty || null,
-    lastLogin: u.lastLogin || null,
-  };
+const loginSchema = Joi.object({
+  email: Joi.string().email().required(),
+  password: Joi.string().required()
+});
+
+function signToken(userId) {
+  if (!process.env.JWT_SECRET) throw new Error('JWT_SECRET ausente nas variáveis de ambiente');
+  return jwt.sign({ userId }, process.env.JWT_SECRET, { expiresIn: '7d' });
 }
 
-// Helper: cria token JWT
-function signToken(user) {
-  if (!JWT_SECRET) {
-    throw new Error('JWT_SECRET não configurado no ambiente');
-  }
-  return jwt.sign(
-    { userId: user.id, email: user.email },
-    JWT_SECRET,
-    { expiresIn: '7d' }
-  );
-}
-
-/**
- * REGISTRO
- * (Se você tiver um middleware validateAuth com Joi, reative abaixo)
- */
-router.post('/register', /* validateAuth, */ async (req, res) => {
+router.post('/register', async (req, res) => {
   try {
-    let { name, email, password, phone, crm, specialty } = req.body || {};
-    email = (email || '').trim().toLowerCase();
+    const data = await registerSchema.validateAsync(req.body, { abortEarly: false });
 
-    if (!name || !email || !password) {
-      return res.status(400).json({ error: 'Nome, email e senha são obrigatórios' });
-    }
+    // Confere duplicidade (evita 500 por unique)
+    const existingEmail = await User.findOne({ where: { email: data.email } });
+    if (existingEmail) return res.status(409).json({ error: 'E-mail já cadastrado' });
 
-    // E-mail único
-    const existingUser = await User.findOne({ where: { email } });
-    if (existingUser) {
-      return res.status(400).json({ error: 'Email já cadastrado' });
-    }
+    const existingCrm = await User.findOne({ where: { crm: data.crm } });
+    if (existingCrm) return res.status(409).json({ error: 'CRM já cadastrado' });
 
-    // CRM único (somente se enviado)
-    if (crm && String(crm).trim()) {
-      const existingCRM = await User.findOne({ where: { crm } });
-      if (existingCRM) {
-        return res.status(400).json({ error: 'CRM já cadastrado' });
-      }
-    }
-
-    const hashedPassword = await bcrypt.hash(password, 12);
-
+    const passwordHash = await bcrypt.hash(data.password, 10);
     const user = await User.create({
-      name,
-      email,
-      password: hashedPassword,
-      phone: phone || null,
-      crm: crm || null,
-      specialty: specialty || null,
+      name: data.name,
+      email: data.email,
+      passwordHash, // vai para a coluna 'password' por causa do field
+      phone: data.phone || null,
+      crm: data.crm,
+      specialty: data.specialty || null,
+      avatar: data.avatar || null,
+      isActive: true
     });
 
-    // Assinatura trial inicial (7 dias, 3 análises)
-    const trialEndDate = new Date();
-    trialEndDate.setDate(trialEndDate.getDate() + 7);
-    await Subscription.create({
-      userId: user.id,
-      plan: 'trial',
-      endDate: trialEndDate,
-      analysisLimit: 3,
-    });
-
-    const token = signToken(user);
-
+    const token = signToken(user.id);
     return res.status(201).json({
-      message: 'Usuário criado com sucesso',
       token,
-      user: safeUser(user),
+      user: {
+        id: user.id,
+        name: user.name,
+        email: user.email,
+        crm: user.crm,
+        specialty: user.specialty,
+        phone: user.phone,
+        avatar: user.avatar
+      }
     });
-  } catch (error) {
-    // Em produção, evite retornar error.message direto
+  } catch (err) {
+    if (err.isJoi) {
+      return res.status(400).json({ error: 'Dados inválidos', details: err.details.map(d => d.message) });
+    }
+    if (String(err.message).includes('JWT_SECRET')) {
+      console.error('Auth register error:', err.message);
+      return res.status(500).json({ error: 'Configuração do servidor ausente (JWT_SECRET)' });
+    }
+    // Captura de erros de unique no Sequelize
+    if (err?.name === 'SequelizeUniqueConstraintError') {
+      const field = err.errors?.[0]?.path || 'campo único';
+      return res.status(409).json({ error: `Valor já cadastrado para ${field}` });
+    }
+    console.error('Auth register error:', err);
     return res.status(500).json({ error: 'Erro ao registrar usuário' });
   }
 });
 
-/**
- * LOGIN
- * Retorna 401 com { error: 'Credenciais inválidas' } se e-mail/senha não baterem.
- */
 router.post('/login', async (req, res) => {
   try {
-    let { email, password } = req.body || {};
-    email = (email || '').trim().toLowerCase();
+    const data = await loginSchema.validateAsync(req.body, { abortEarly: false });
+    const user = await User.findOne({ where: { email: data.email } });
+    if (!user) return res.status(401).json({ error: 'Credenciais inválidas' });
 
-    if (!email || !password) {
-      return res.status(400).json({ error: 'Email e senha são obrigatórios' });
-    }
+    const ok = await bcrypt.compare(data.password, user.passwordHash);
+    if (!ok) return res.status(401).json({ error: 'Credenciais inválidas' });
 
-    const user = await User.findOne({
-      where: { email },
-      include: [{ model: Subscription }],
-    });
-
-    // Mesmo retorno genérico para evitar revelar qual campo falhou
-    if (!user) {
-      return res.status(401).json({ error: 'Credenciais inválidas' });
-    }
-
-    const ok = await bcrypt.compare(password, user.password);
-    if (!ok) {
-      return res.status(401).json({ error: 'Credenciais inválidas' });
-    }
-
+    const token = signToken(user.id);
     await user.update({ lastLogin: new Date() });
 
-    const token = signToken(user);
-
     return res.json({
-      message: 'Login realizado com sucesso',
       token,
       user: {
-        ...safeUser(user),
-        subscription: user.Subscription || null,
-      },
+        id: user.id,
+        name: user.name,
+        email: user.email,
+        crm: user.crm,
+        specialty: user.specialty,
+        phone: user.phone,
+        avatar: user.avatar
+      }
     });
-  } catch (error) {
-    return res.status(500).json({ error: 'Erro ao realizar login' });
+  } catch (err) {
+    if (err.isJoi) {
+      return res.status(400).json({ error: 'Dados inválidos', details: err.details.map(d => d.message) });
+    }
+    if (String(err.message).includes('JWT_SECRET')) {
+      console.error('Auth login error:', err.message);
+      return res.status(500).json({ error: 'Configuração do servidor ausente (JWT_SECRET)' });
+    }
+    console.error('Auth login error:', err);
+    return res.status(500).json({ error: 'Erro ao autenticar' });
   }
 });
 

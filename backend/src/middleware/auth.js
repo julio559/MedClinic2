@@ -1,26 +1,32 @@
+// backend/src/middleware/auth.js
 const jwt = require('jsonwebtoken');
 const { User } = require('../models');
 
-const authenticate = async (req, res, next) => {
+module.exports = async function authenticate(req, res, next) {
   try {
-    const token = req.header('Authorization')?.replace('Bearer ', '');
-    
-    if (!token) {
+    const auth = req.header('Authorization') || '';
+    const [scheme, token] = auth.split(' ');
+
+    if (scheme !== 'Bearer' || !token) {
       return res.status(401).json({ error: 'Token não fornecido' });
+    }
+    if (!process.env.JWT_SECRET) {
+      console.error('✖ JWT_SECRET ausente no ambiente');
+      return res.status(500).json({ error: 'Configuração do servidor ausente (JWT_SECRET)' });
     }
 
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
-    const user = await User.findByPk(decoded.userId);
-    
+    const userId = decoded?.userId;
+    if (!userId) return res.status(401).json({ error: 'Token inválido' });
+
+    const user = await User.findByPk(userId);
     if (!user || !user.isActive) {
       return res.status(401).json({ error: 'Usuário inválido' });
     }
 
-    req.user = decoded;
+    req.userId = user.id;
     next();
   } catch (error) {
-    res.status(401).json({ error: 'Token inválido' });
+    return res.status(401).json({ error: 'Token inválido' });
   }
 };
-
-module.exports = { authenticate };
