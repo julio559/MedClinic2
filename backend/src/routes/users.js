@@ -20,14 +20,14 @@ function toSafeUser(user) {
     phone: user.phone,
     avatar: user.avatar,
     isActive: user.isActive,
-    role: user.role ?? null, // se existir na tabela
+    role: user.role ?? null,
     createdAt: user.createdAt,
     updatedAt: user.updatedAt,
   };
 }
 
 function getUserId(req) {
-  // aceita req.userId (nosso middleware) OU req.user.userId (seu middleware antigo)
+  // aceita req.userId (nosso middleware) OU req.user.userId (formato antigo)
   return req.userId || (req.user && req.user.userId) || null;
 }
 
@@ -76,7 +76,7 @@ router.put('/me', authenticate, async (req, res) => {
     const uid = getUserId(req);
     if (!uid) return res.status(401).json({ error: 'Token inválido' });
 
-    const { name, email, crm, specialty, phone } = req.body;
+    const { name, email, crm, specialty, phone } = req.body || {};
     const user = await User.findByPk(uid);
     if (!user) return res.status(404).json({ error: 'Usuário não encontrado' });
 
@@ -84,9 +84,9 @@ router.put('/me', authenticate, async (req, res) => {
       return res.status(400).json({ error: 'Nome e e-mail são obrigatórios' });
     }
 
-    // Valida unicidade do e-mail se for alterar
+    // Se mudar e-mail, garanta unicidade
     if (email !== user.email) {
-      const exists = await User.findOne({ where: { email } });
+      const exists = await User.findOne({ where: { email: String(email).trim() } });
       if (exists) return res.status(400).json({ error: 'E-mail já está em uso' });
     }
 
@@ -114,7 +114,7 @@ router.post('/change-password', authenticate, async (req, res) => {
     const uid = getUserId(req);
     if (!uid) return res.status(401).json({ error: 'Token inválido' });
 
-    const { currentPassword, newPassword } = req.body;
+    const { currentPassword, newPassword } = req.body || {};
     if (!currentPassword || !newPassword) {
       return res.status(400).json({ error: 'Informe a senha atual e a nova senha' });
     }
@@ -136,7 +136,7 @@ router.post('/change-password', authenticate, async (req, res) => {
 
     const newHash = await bcrypt.hash(String(newPassword), 10);
     if (user.passwordHash !== undefined) {
-      await user.update({ passwordHash: newHash }); // mapeia para coluna 'password' se field estiver no model
+      await user.update({ passwordHash: newHash });
     } else {
       await user.update({ password: newHash });
     }
@@ -151,7 +151,7 @@ router.post('/change-password', authenticate, async (req, res) => {
 /**
  * GET /api/users/stats
  * Estatísticas do médico logado
- * Response: { totalAnalyses, completedAnalyses, processingAnalyses, totalPatients }
+ * { totalAnalyses, completedAnalyses, processingAnalyses, totalPatients }
  */
 router.get('/stats', authenticate, async (req, res) => {
   try {
@@ -159,14 +159,9 @@ router.get('/stats', authenticate, async (req, res) => {
     if (!doctorId) return res.status(401).json({ error: 'Token inválido' });
 
     const totalPatients = await Patient.count({ where: { doctorId } });
-
     const totalAnalyses = await Analysis.count({ where: { doctorId } });
-    const completedAnalyses = await Analysis.count({
-      where: { doctorId, status: 'completed' },
-    });
-    const processingAnalyses = await Analysis.count({
-      where: { doctorId, status: 'processing' }, // ajuste se houver outro status
-    });
+    const completedAnalyses = await Analysis.count({ where: { doctorId, status: 'completed' } });
+    const processingAnalyses = await Analysis.count({ where: { doctorId, status: 'processing' } });
 
     return res.json({
       totalAnalyses,
