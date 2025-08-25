@@ -1,45 +1,18 @@
-// backend/src/models/index.js
 const { Sequelize } = require('sequelize');
 require('dotenv').config();
 
-const common = {
-  dialect: 'mysql',
-  logging: false,
-  pool: { max: 5, min: 0, acquire: 60000, idle: 10000 },
-  dialectOptions: { connectTimeout: 60000 },
-};
-
-let sequelize;
-
-// Cloud Run + Cloud SQL (socket) se INSTANCE_CONNECTION_NAME estiver definido
-if (process.env.INSTANCE_CONNECTION_NAME) {
-  const socketBase = process.env.DB_SOCKET_PATH || '/cloudsql';
-  sequelize = new Sequelize(
-    process.env.DB_NAME,
-    process.env.DB_USER,
-    process.env.DB_PASS,
-    {
-      ...common,
-      host: 'localhost',
-      dialectOptions: {
-        ...common.dialectOptions,
-        socketPath: `${socketBase}/${process.env.INSTANCE_CONNECTION_NAME}`,
-      },
-    }
-  );
-} else {
-  // Dev/local ou outros hosts: TCP/IP
-  sequelize = new Sequelize(
-    process.env.DB_NAME,
-    process.env.DB_USER,
-    process.env.DB_PASS,
-    {
-      ...common,
-      host: process.env.DB_HOST || '127.0.0.1',
-      port: Number(process.env.DB_PORT || 3306),
-    }
-  );
-}
+const sequelize = new Sequelize(
+  process.env.DB_NAME,
+  process.env.DB_USER,
+  process.env.DB_PASS,
+  {
+    host: process.env.DB_HOST,
+    port: process.env.DB_PORT,
+    dialect: 'mysql',
+    logging: false,
+    pool: { max: 5, min: 0, acquire: 30000, idle: 10000 }
+  }
+);
 
 const db = {};
 db.Sequelize = Sequelize;
@@ -53,7 +26,7 @@ db.Subscription = require('./Subscription')(sequelize, Sequelize);
 db.MedicalImage = require('./MedicalImage')(sequelize, Sequelize);
 db.Plan = require('./Plan')(sequelize, Sequelize);
 
-// Associações
+// Associations
 db.User.hasMany(db.Patient, { foreignKey: 'doctorId' });
 db.Patient.belongsTo(db.User, { foreignKey: 'doctorId', as: 'doctor' });
 
@@ -72,7 +45,7 @@ db.MedicalImage.belongsTo(db.Analysis, { foreignKey: 'analysisId' });
 db.User.hasOne(db.Subscription, { foreignKey: 'userId' });
 db.Subscription.belongsTo(db.User, { foreignKey: 'userId' });
 
-// Plan <-> Subscription (Subscription.plan -> Plan.id)
+// Plan <-> Subscription (Subscription.plan → Plan.id)
 db.Plan.hasMany(db.Subscription, {
   foreignKey: 'plan',
   sourceKey: 'id',

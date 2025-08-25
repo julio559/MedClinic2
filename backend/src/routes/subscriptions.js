@@ -1,16 +1,15 @@
-// backend/src/routes/subscriptions.js
 const express = require('express');
 const { v4: uuidv4 } = require('uuid');
 const db = require('../models');
 
-// Import compatível com export default OU nomeado
+// Middleware de autenticação (compatível default/nomeado)
 const authModule = require('../middleware/auth');
 const authenticate = authModule?.authenticate || authModule;
 
 const router = express.Router();
 const sequelize = db.sequelize;
 
-/* =============== Helpers de schema/columns =============== */
+/* Helpers de schema/columns (para leitura flexível da tabela plans) */
 async function getSchemaName() {
   if (process.env.DB_NAME) return process.env.DB_NAME;
   const cfg = sequelize?.config?.database || sequelize?.options?.database || null;
@@ -25,11 +24,7 @@ async function getSchemaName() {
 async function plansTableExists(schemaName) {
   try {
     const [rows] = await sequelize.query(
-      `SELECT 1
-         FROM INFORMATION_SCHEMA.TABLES
-        WHERE TABLE_SCHEMA = ?
-          AND TABLE_NAME = 'plans'
-        LIMIT 1`,
+      `SELECT 1 FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA = ? AND TABLE_NAME = 'plans' LIMIT 1`,
       { replacements: [schemaName] }
     );
     return !!rows?.length;
@@ -44,10 +39,7 @@ async function getPlansColumns() {
   if (!(await plansTableExists(schema))) return { set: new Set(), col: {} };
 
   const [rows] = await sequelize.query(
-    `SELECT COLUMN_NAME AS name
-       FROM INFORMATION_SCHEMA.COLUMNS
-      WHERE TABLE_SCHEMA = ?
-        AND TABLE_NAME = 'plans'`,
+    `SELECT COLUMN_NAME AS name FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = ? AND TABLE_NAME = 'plans'`,
     { replacements: [schema] }
   );
   const set = new Set(rows.map(r => r.name));
@@ -56,19 +48,19 @@ async function getPlansColumns() {
   return {
     set,
     col: {
-      id:             has('id') ? 'id' : null,
-      name:           has('name') ? 'name' : null,
-      price:          has('price') ? 'price' : null,
-      currency:       has('currency') ? 'currency' : null,
-      durationType:   has('duration_type') ? 'duration_type' : (has('durationType') ? 'durationType' : null),
-      durationValue:  has('duration_value') ? 'duration_value' : (has('durationValue') ? 'durationValue' : null),
-      analysisLimit:  has('analysis_limit') ? 'analysis_limit' : (has('analysisLimit') ? 'analysisLimit' : null),
-      isPopular:      has('is_popular') ? 'is_popular' : (has('isPopular') ? 'isPopular' : null),
-      isActive:       has('is_active') ? 'is_active' : (has('isActive') ? 'isActive' : null),
-      features:       has('features') ? 'features' : null,
-      color:          has('color') ? 'color' : null,
-      createdAt:      (has('created_at') && 'created_at') || (has('createdAt') && 'createdAt') || null,
-      updatedAt:      (has('updated_at') && 'updated_at') || (has('updatedAt') && 'updatedAt') || null,
+      id: has('id') ? 'id' : null,
+      name: has('name') ? 'name' : null,
+      price: has('price') ? 'price' : null,
+      currency: has('currency') ? 'currency' : null,
+      durationType: has('duration_type') ? 'duration_type' : (has('durationType') ? 'durationType' : null),
+      durationValue: has('duration_value') ? 'duration_value' : (has('durationValue') ? 'durationValue' : null),
+      analysisLimit: has('analysis_limit') ? 'analysis_limit' : (has('analysisLimit') ? 'analysisLimit' : null),
+      isPopular: has('is_popular') ? 'is_popular' : (has('isPopular') ? 'isPopular' : null),
+      isActive: has('is_active') ? 'is_active' : (has('isActive') ? 'isActive' : null),
+      features: has('features') ? 'features' : null,
+      color: has('color') ? 'color' : null,
+      createdAt: (has('created_at') && 'created_at') || (has('createdAt') && 'createdAt') || null,
+      updatedAt: (has('updated_at') && 'updated_at') || (has('updatedAt') && 'updatedAt') || null,
     }
   };
 }
@@ -76,7 +68,9 @@ async function getPlansColumns() {
 function normalizePlanRow(row, col) {
   const pick = k => (col[k] ? row[col[k]] : null);
   let features = pick('features');
-  if (typeof features === 'string') { try { features = JSON.parse(features); } catch {} }
+  if (typeof features === 'string') {
+    try { features = JSON.parse(features); } catch {}
+  }
   return {
     id: pick('id'),
     name: pick('name'),
@@ -155,13 +149,11 @@ function calculateEndDate(durationType, durationValue) {
 // GET /api/subscriptions
 router.get('/', authenticate, async (req, res) => {
   try {
-    const userId = req.userId; // ✅ do middleware
+    const userId = req.userId;
     if (!userId) return res.status(401).json({ error: 'Token inválido' });
-    if (!db.Subscription) return res.status(500).json({ error: 'Model Subscription não encontrado' });
 
     let subscription = await db.Subscription.findOne({ where: { userId } });
 
-    // cria trial (ou primeiro ativo) se não houver
     if (!subscription) {
       const plan = (await getAnyActivePlanByIdOrFirst('trial')) || (await getAnyActivePlanByIdOrFirst(null));
 
@@ -178,8 +170,7 @@ router.get('/', authenticate, async (req, res) => {
       }
 
       subscription = await db.Subscription.create({
-        id: uuidv4(),                // garante id
-        userId,                      // 🔴 OBRIGATÓRIO
+        userId,
         plan: plan.id,
         status: 'active',
         startDate: new Date(),
@@ -189,7 +180,6 @@ router.get('/', authenticate, async (req, res) => {
       });
     }
 
-    // detalhes do plano (melhor esforço)
     let planDetails = null;
     try {
       planDetails =
@@ -219,7 +209,6 @@ router.post('/upgrade', authenticate, async (req, res) => {
   try {
     const userId = req.userId;
     if (!userId) return res.status(401).json({ error: 'Token inválido' });
-    if (!db.Subscription) return res.status(500).json({ error: 'Model Subscription não encontrado' });
 
     const planId = String(req.body?.plan || '').trim();
     if (!planId) return res.status(400).json({ error: 'Plano não informado' });
@@ -232,7 +221,6 @@ router.post('/upgrade', authenticate, async (req, res) => {
 
     if (!subscription) {
       subscription = await db.Subscription.create({
-        id: uuidv4(),
         userId,
         plan: plan.id,
         status: 'active',
@@ -279,7 +267,6 @@ router.post('/cancel', authenticate, async (req, res) => {
   try {
     const userId = req.userId;
     if (!userId) return res.status(401).json({ error: 'Token inválido' });
-    if (!db.Subscription) return res.status(500).json({ error: 'Model Subscription não encontrado' });
 
     const subscription = await db.Subscription.findOne({ where: { userId } });
     if (!subscription) return res.status(404).json({ error: 'Assinatura não encontrada' });

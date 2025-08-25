@@ -1,4 +1,3 @@
-// backend/src/models/Subscription.js
 const { v4: uuidv4 } = require('uuid');
 
 module.exports = (sequelize, Sequelize) => {
@@ -9,24 +8,21 @@ module.exports = (sequelize, Sequelize) => {
       type: DataTypes.STRING(36),
       allowNull: false,
       primaryKey: true,
-      defaultValue: () => uuidv4(),        // UUID como no resto do projeto
+      defaultValue: () => uuidv4(),   // gera UUID no create
     },
-
-    // Se sua coluna no DB for 'user_id' (snake), mude o field abaixo para 'user_id'
-    userId: { type: DataTypes.STRING(36), allowNull: false, field: 'userId' },
-
-    // aponta para Plan.id (string)
+    userId: {
+      type: DataTypes.STRING(36),
+      allowNull: false,
+      field: 'userId',               // se no DB for 'user_id', troque aqui
+    },
     plan: { type: DataTypes.STRING(64), allowNull: false },
-
     status: {
       type: DataTypes.ENUM('active', 'cancelled', 'expired'),
       allowNull: false,
       defaultValue: 'active'
     },
-
     startDate: { type: DataTypes.DATE, allowNull: true },
     endDate:   { type: DataTypes.DATE, allowNull: true },
-
     analysisLimit: { type: DataTypes.INTEGER, allowNull: false, defaultValue: 0 },
     analysisUsed:  { type: DataTypes.INTEGER, allowNull: false, defaultValue: 0 }
   }, {
