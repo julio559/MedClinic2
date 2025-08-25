@@ -27,6 +27,7 @@ module.exports = async function authenticate(req, res, next) {
     req.userId = user.id;
     next();
   } catch (error) {
+    console.error('Auth middleware error:', { name: error?.name, message: error?.message });
     return res.status(401).json({ error: 'Token inválido' });
   }
 };

@@ -3,7 +3,7 @@ module.exports = (sequelize, DataTypes) => {
   const User = sequelize.define('User', {
     id: {
       type: DataTypes.UUID,
-      defaultValue: DataTypes.UUIDV4, // gera UUID no MySQL como CHAR(36)
+      defaultValue: DataTypes.UUIDV4, // CHAR(36) no MySQL
       primaryKey: true
     },
 
@@ -20,12 +20,12 @@ module.exports = (sequelize, DataTypes) => {
       validate: { isEmail: true }
     },
 
-    // IMPORTANTE: o banco continua com a coluna 'password'
-    // mas no código usamos 'passwordHash'.
+    // ATENÇÃO:
+    // Se a coluna REAL no banco for "password_hash", troque o field abaixo.
     passwordHash: {
       type: DataTypes.STRING(255),
       allowNull: false,
-      field: 'password' // mapeia para a coluna existente
+      field: 'password' // ou 'password_hash' se seu banco tiver esse nome
     },
 
     phone: { type: DataTypes.STRING(50), allowNull: true },
@@ -41,7 +41,10 @@ module.exports = (sequelize, DataTypes) => {
     avatar: { type: DataTypes.TEXT, allowNull: true },
 
     isActive: { type: DataTypes.BOOLEAN, defaultValue: true },
-    lastLogin: { type: DataTypes.DATE, allowNull: true }
+    lastLogin: { type: DataTypes.DATE, allowNull: true },
+
+    // opcional: role
+    role: { type: DataTypes.STRING(50), allowNull: true }
   }, {
     tableName: 'users',
     timestamps: true,

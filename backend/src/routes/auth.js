@@ -27,103 +27,97 @@ function signToken(userId) {
   return jwt.sign({ userId }, process.env.JWT_SECRET, { expiresIn: '7d' });
 }
 
+function toSafeUser(user) {
+  if (!user) return null;
+  return {
+    id: user.id,
+    name: user.name,
+    email: user.email,
+    crm: user.crm,
+    specialty: user.specialty,
+    phone: user.phone,
+    avatar: user.avatar,
+    isActive: user.isActive,
+    role: user.role ?? null,
+    createdAt: user.createdAt,
+    updatedAt: user.updatedAt,
+  };
+}
+
+// POST /api/auth/register
 router.post('/register', async (req, res) => {
   try {
     const data = await registerSchema.validateAsync(req.body, { abortEarly: false });
 
-    // Confere duplicidade (evita 500 por unique)
-    const existingEmail = await User.findOne({ where: { email: data.email } });
-    if (existingEmail) return res.status(409).json({ error: 'E-mail já cadastrado' });
+    // evitar duplicidade explícita (além do unique do banco)
+    const [existingEmail, existingCrm] = await Promise.all([
+      User.findOne({ where: { email: String(data.email).trim().toLowerCase() } }),
+      User.findOne({ where: { crm: String(data.crm).trim() } }),
+    ]);
+    if (existingEmail) return res.status(400).json({ error: 'E-mail já está em uso' });
+    if (existingCrm)   return res.status(400).json({ error: 'CRM já está em uso' });
 
-    const existingCrm = await User.findOne({ where: { crm: data.crm } });
-    if (existingCrm) return res.status(409).json({ error: 'CRM já cadastrado' });
+    const passwordHash = await bcrypt.hash(String(data.password), 10);
 
-    const passwordHash = await bcrypt.hash(data.password, 10);
     const user = await User.create({
-      name: data.name,
-      email: data.email,
-      passwordHash, // vai para a coluna 'password' por causa do field
-      phone: data.phone || null,
-      crm: data.crm,
-      specialty: data.specialty || null,
+      name: String(data.name).trim(),
+      email: String(data.email).trim().toLowerCase(),
+      passwordHash, // mapeia para a coluna 'password' via field no model
+      phone: data.phone ? String(data.phone).trim() : null,
+      crm: String(data.crm).trim(),
+      specialty: data.specialty ? String(data.specialty).trim() : null,
       avatar: data.avatar || null,
       isActive: true
     });
 
+    // ✔ retorna 200 (alguns fronts só tratam 200)
     const token = signToken(user.id);
-    return res.status(201).json({
+    return res.status(200).json({
       token,
-      user: {
-        id: user.id,
-        name: user.name,
-        email: user.email,
-        crm: user.crm,
-        specialty: user.specialty,
-        phone: user.phone,
-        avatar: user.avatar
-      }
+      user: toSafeUser(user)
     });
- } catch (err) {
-  if (err.isJoi) {
-    return res.status(400).json({ error: 'Dados inválidos', details: err.details.map(d => d.message) });
-  }
-  if (String(err.message).includes('JWT_SECRET')) {
-    console.error('Auth register error:', err.message);
-    return res.status(500).json({ error: 'Configuração do servidor ausente (JWT_SECRET)' });
-  }
-  if (err?.name === 'SequelizeUniqueConstraintError') {
-    const field = err.errors?.[0]?.path || 'campo único';
-    return res.status(409).json({ error: `Valor já cadastrado para ${field}` });
-  }
+  } catch (err) {
+    if (err.isJoi) {
+      return res.status(400).json({ error: 'Dados inválidos', details: err.details.map(d => d.message) });
+    }
+    if (String(err.message).includes('JWT_SECRET')) {
+      console.error('Auth register error:', err.message);
+      return res.status(500).json({ error: 'Configuração do servidor ausente (JWT_SECRET)' });
+    }
+    if (err?.name === 'SequelizeUniqueConstraintError') {
+      const field = err.errors?.[0]?.path || 'campo único';
+      return res.status(400).json({ error: `Valor já cadastrado para ${field}` });
+    }
 
-  // 🔥 Aqui o log detalhado
-  console.error('Auth register error:', {
-    name: err?.name,
-    message: err?.message,
-    errors: err?.errors,
-    fields: err?.fields,
-    stack: err?.stack
-  });
-
-  return res.status(500).json({
-    error: 'Erro ao registrar usuário',
-    details: {
+    // Log detalhado para Cloud Run/Logging
+    console.error('Auth register error:', {
       name: err?.name,
       message: err?.message,
+      errors: err?.errors,
       fields: err?.fields,
-      errors: err?.errors?.map(e => ({
-        message: e.message,
-        path: e.path,
-        value: e.value
-      }))
-    }
-  });
-}
+      stack: err?.stack
+    });
+
+    return res.status(500).json({ error: 'Erro ao registrar usuário' });
+  }
 });
 
+// POST /api/auth/login
 router.post('/login', async (req, res) => {
   try {
     const data = await loginSchema.validateAsync(req.body, { abortEarly: false });
-    const user = await User.findOne({ where: { email: data.email } });
+    const user = await User.findOne({ where: { email: String(data.email).trim().toLowerCase() } });
     if (!user) return res.status(401).json({ error: 'Credenciais inválidas' });
 
-    const ok = await bcrypt.compare(data.password, user.passwordHash);
+    const ok = await bcrypt.compare(String(data.password), String(user.passwordHash));
     if (!ok) return res.status(401).json({ error: 'Credenciais inválidas' });
 
     const token = signToken(user.id);
     await user.update({ lastLogin: new Date() });
 
-    return res.json({
+    return res.status(200).json({
       token,
-      user: {
-        id: user.id,
-        name: user.name,
-        email: user.email,
-        crm: user.crm,
-        specialty: user.specialty,
-        phone: user.phone,
-        avatar: user.avatar
-      }
+      user: toSafeUser(user)
     });
   } catch (err) {
     if (err.isJoi) {
@@ -133,7 +127,15 @@ router.post('/login', async (req, res) => {
       console.error('Auth login error:', err.message);
       return res.status(500).json({ error: 'Configuração do servidor ausente (JWT_SECRET)' });
     }
-    console.error('Auth login error:', err);
+
+    console.error('Auth login error:', {
+      name: err?.name,
+      message: err?.message,
+      errors: err?.errors,
+      fields: err?.fields,
+      stack: err?.stack
+    });
+
     return res.status(500).json({ error: 'Erro ao autenticar' });
   }
 });
