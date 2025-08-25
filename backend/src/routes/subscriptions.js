@@ -1,5 +1,6 @@
 // backend/src/routes/subscriptions.js
 const express = require('express');
+const { v4: uuidv4 } = require('uuid');
 const db = require('../models');
 
 // Import compatível com export default OU nomeado
@@ -154,19 +155,17 @@ function calculateEndDate(durationType, durationValue) {
 // GET /api/subscriptions
 router.get('/', authenticate, async (req, res) => {
   try {
-    const userId = req.userId;         // ✅ do middleware
+    const userId = req.userId; // ✅ do middleware
     if (!userId) return res.status(401).json({ error: 'Token inválido' });
     if (!db.Subscription) return res.status(500).json({ error: 'Model Subscription não encontrado' });
 
-    // Busca assinatura do usuário
     let subscription = await db.Subscription.findOne({ where: { userId } });
 
-    // Se não existir, cria TRIAL (ou 1º plano ativo/qualquer)
+    // cria trial (ou primeiro ativo) se não houver
     if (!subscription) {
       const plan = (await getAnyActivePlanByIdOrFirst('trial')) || (await getAnyActivePlanByIdOrFirst(null));
 
       if (!plan) {
-        // Sem tabela/linhas em plans → retorno "vazio", sem erro
         return res.json({
           plan: 'trial',
           status: 'inactive',
@@ -179,7 +178,8 @@ router.get('/', authenticate, async (req, res) => {
       }
 
       subscription = await db.Subscription.create({
-        userId,
+        id: uuidv4(),                // garante id
+        userId,                      // 🔴 OBRIGATÓRIO
         plan: plan.id,
         status: 'active',
         startDate: new Date(),
@@ -189,10 +189,13 @@ router.get('/', authenticate, async (req, res) => {
       });
     }
 
-    // Tenta carregar detalhes do plano — se falhar, segue com null
+    // detalhes do plano (melhor esforço)
     let planDetails = null;
     try {
-      planDetails = (await getPlanById(subscription.plan)) || (await getAnyActivePlanByIdOrFirst(subscription.plan)) || null;
+      planDetails =
+        (await getPlanById(subscription.plan)) ||
+        (await getAnyActivePlanByIdOrFirst(subscription.plan)) ||
+        null;
     } catch {}
 
     return res.json({
@@ -229,6 +232,7 @@ router.post('/upgrade', authenticate, async (req, res) => {
 
     if (!subscription) {
       subscription = await db.Subscription.create({
+        id: uuidv4(),
         userId,
         plan: plan.id,
         status: 'active',
