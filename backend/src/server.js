@@ -338,7 +338,7 @@ io.on('connection', (socket) => {
   socket.on('disconnect', () => console.log('👨‍⚕️ Doctor disconnected:', socket.id));
 });
 
-const PORT = process.env.PORT || 3001;
+const PORT = process.env.PORT || 8080;
 
 /** Bootstrap */
 async function bootstrap() {
