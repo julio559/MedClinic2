@@ -7,7 +7,7 @@ const PROD_BASE_URL = 'https://medclinic2-551551227298.southamerica-east1.run.ap
 // <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
 
 // Se quiser forçar prod mesmo em dev, mude para true
-const FORCE_PROD = true;
+const FORCE_PROD = false;
 
 // Opcional: se for testar em aparelho físico na mesma rede, coloque o IP da sua máquina
 // Ex.: '192.168.1.100' — deixe '' para ignorar
