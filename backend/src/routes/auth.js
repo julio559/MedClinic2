@@ -1,8 +1,10 @@
+// backend/src/routes/auth.js
 const express = require('express');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const Joi = require('joi');
-const { User } = require('../models');
+const { User, Subscription, sequelize } = require('../models');
+const { v4: uuidv4 } = require('uuid');
 
 const router = express.Router();
 
@@ -43,6 +45,31 @@ function toSafeUser(user) {
   };
 }
 
+// helper: pega primeiro plano ativo (de preferência 'trial')
+async function getTrialPlan() {
+  try {
+    const [rows] = await sequelize.query(
+      `SELECT id, duration_type, duration_value, analysis_limit
+         FROM plans
+        WHERE (id = 'trial' OR is_active = 1)
+        ORDER BY (id = 'trial') DESC, id ASC
+        LIMIT 1`
+    );
+    return rows?.[0] || null;
+  } catch {
+    return null;
+  }
+}
+function calcEndDate(duration_type, duration_value) {
+  const now = new Date();
+  const v = Number(duration_value || 0);
+  if (duration_type === 'days') now.setDate(now.getDate() + v);
+  else if (duration_type === 'months') now.setMonth(now.getMonth() + v);
+  else if (duration_type === 'years') now.setFullYear(now.getFullYear() + v);
+  else now.setDate(now.getDate() + 7); // default 7 dias
+  return now;
+}
+
 // POST /api/auth/register
 router.post('/register', async (req, res) => {
   try {
@@ -63,7 +90,7 @@ router.post('/register', async (req, res) => {
     const user = await User.create({
       name: String(data.name).trim(),
       email,
-      passwordHash, // -> coluna 'password' no DB
+      passwordHash, // mapeia para coluna 'password'
       phone: data.phone ? String(data.phone).trim() : null,
       crm,
       specialty: data.specialty ? String(data.specialty).trim() : null,
@@ -71,7 +98,29 @@ router.post('/register', async (req, res) => {
       isActive: true
     });
 
-    // 200 para agradar front que só trata 200 como sucesso
+    // 🔹 Bootstrap opcional de assinatura (silencioso, não falha o registro)
+    try {
+      const hasSub = await Subscription.findOne({ where: { userId: user.id } });
+      if (!hasSub) {
+        const plan = await getTrialPlan(); // trial ou primeiro ativo
+        if (plan) {
+          await Subscription.create({
+            id: uuidv4(),
+            userId: user.id,
+            plan: plan.id,
+            status: 'active',
+            startDate: new Date(),
+            endDate: calcEndDate(plan.duration_type, plan.duration_value),
+            analysisLimit: Number(plan.analysis_limit || 0),
+            analysisUsed: 0
+          });
+        }
+      }
+    } catch (e) {
+      console.error('register: falha ao criar assinatura trial (não bloqueia):', e?.message || e);
+      // segue sem travar o registro
+    }
+
     const token = signToken(user.id);
     return res.status(200).json({ token, user: toSafeUser(user) });
   } catch (err) {
@@ -86,7 +135,6 @@ router.post('/register', async (req, res) => {
       const field = err.errors?.[0]?.path || 'campo único';
       return res.status(400).json({ error: `Valor já cadastrado para ${field}` });
     }
-
     console.error('Auth register error:', {
       name: err?.name, message: err?.message,
       errors: err?.errors, fields: err?.fields, stack: err?.stack
@@ -119,7 +167,6 @@ router.post('/login', async (req, res) => {
       console.error('Auth login error:', err.message);
       return res.status(500).json({ error: 'Configuração do servidor ausente (JWT_SECRET)' });
     }
-
     console.error('Auth login error:', {
       name: err?.name, message: err?.message,
       errors: err?.errors, fields: err?.fields, stack: err?.stack
