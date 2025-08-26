@@ -62,6 +62,12 @@ app.use('/api/analysis', analysisRoutes);
 app.use('/api/subscriptions', subscriptionRoutes);
 app.use('/api/plans', plansRoutes);
 
+app.get('/_ping', (req, res) => {
+  const rev = process.env.K_REVISION || 'local';
+  res.set('x-revision', rev);
+  res.json({ ok: true, revision: rev });
+});
+
 // Health check (não bloqueante)
 app.get('/health', async (req, res) => {
   try {
