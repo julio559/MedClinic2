@@ -3,12 +3,18 @@ const { Patient, Analysis, AnalysisResult } = require('../models');
 const { authenticate } = require('../middleware/auth');
 const router = express.Router();
 
-// Get all patients for doctor
+// GET /api/patients
 router.get('/', authenticate, async (req, res) => {
   try {
     const patients = await Patient.findAll({
       where: { doctorId: req.userId },
-      include: [{ model: Analysis, include: [AnalysisResult] }],
+      include: [
+        {
+          model: Analysis,
+          as: 'Analyses',
+          include: [{ model: AnalysisResult, as: 'AnalysisResults' }]
+        }
+      ],
       order: [['createdAt', 'DESC']]
     });
 
@@ -18,7 +24,7 @@ router.get('/', authenticate, async (req, res) => {
   }
 });
 
-// Create patient
+// POST /api/patients
 router.post('/', authenticate, async (req, res) => {
   try {
     const patient = await Patient.create({
@@ -32,12 +38,19 @@ router.post('/', authenticate, async (req, res) => {
   }
 });
 
-// Get patient by ID
+// GET /api/patients/:id
 router.get('/:id', authenticate, async (req, res) => {
   try {
     const patient = await Patient.findOne({
       where: { id: req.params.id, doctorId: req.userId },
-      include: [{ model: Analysis, include: [AnalysisResult], order: [['createdAt', 'DESC']] }]
+      include: [
+        {
+          model: Analysis,
+          as: 'Analyses',
+          include: [{ model: AnalysisResult, as: 'AnalysisResults' }]
+        }
+      ],
+      order: [[{ model: Analysis, as: 'Analyses' }, 'createdAt', 'DESC']]
     });
 
     if (!patient) {

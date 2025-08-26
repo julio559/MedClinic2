@@ -70,9 +70,9 @@ router.get('/', authenticate, async (req, res) => {
     const analyses = await Analysis.findAll({
       where: { doctorId },
       include: [
-        { model: Patient, attributes: ['id', 'name', 'email'], required: false },
-        { model: AnalysisResult, attributes: ['id', 'category', 'result', 'confidenceScore', 'isCompleted'], required: false },
-        { model: MedicalImage, attributes: ['id', 'filename', 'originalName', 'imageType'], required: false }
+        { model: Patient, as: 'Patient', attributes: ['id', 'name', 'email'], required: false },
+        { model: AnalysisResult, as: 'AnalysisResults', attributes: ['id', 'category', 'result', 'confidenceScore', 'isCompleted'], required: false },
+        { model: MedicalImage, as: 'MedicalImages', attributes: ['id', 'filename', 'originalName', 'imageType'], required: false }
       ],
       order: [['createdAt', 'DESC']]
     });
@@ -176,7 +176,7 @@ router.post(
 
       if (subscription) await subscription.increment('analysisUsed');
 
-      // background
+      // background (usa os mesmos aliases dentro do aiService ao fazer includes!)
       processWithAI(analysis.id).catch(err => console.error('❌ Erro no processamento de IA:', err));
 
       res.status(201).json({
@@ -207,11 +207,11 @@ router.get('/:id', authenticate, async (req, res) => {
     const analysis = await Analysis.findOne({
       where: { id, doctorId },
       include: [
-        { model: Patient, attributes: ['id', 'name', 'email', 'birthDate', 'gender', 'medicalHistory', 'allergies'], required: false },
-        { model: AnalysisResult, required: false },
-        { model: MedicalImage, attributes: ['id', 'filename', 'originalName', 'imageType', 'mimeType', 'createdAt'], required: false }
+        { model: Patient, as: 'Patient', attributes: ['id', 'name', 'email', 'birthDate', 'gender', 'medicalHistory', 'allergies'], required: false },
+        { model: AnalysisResult, as: 'AnalysisResults', required: false },
+        { model: MedicalImage, as: 'MedicalImages', attributes: ['id', 'filename', 'originalName', 'imageType', 'mimeType', 'createdAt'], required: false }
       ],
-      order: [[AnalysisResult, 'createdAt', 'ASC']]
+      order: [[{ model: AnalysisResult, as: 'AnalysisResults' }, 'createdAt', 'ASC']]
     });
     if (!analysis) return res.status(404).json({ error: 'Análise não encontrada' });
     res.json(analysis);
@@ -229,11 +229,11 @@ router.get('/:id/results', authenticate, async (req, res) => {
     const analysis = await Analysis.findOne({
       where: { id, doctorId },
       include: [
-        { model: Patient, attributes: ['id', 'name', 'email', 'birthDate', 'gender', 'medicalHistory', 'allergies'], required: false },
-        { model: AnalysisResult, required: false },
-        { model: MedicalImage, attributes: ['id', 'filename', 'originalName', 'imageType', 'mimeType', 'createdAt'], required: false }
+        { model: Patient, as: 'Patient', attributes: ['id', 'name', 'email', 'birthDate', 'gender', 'medicalHistory', 'allergies'], required: false },
+        { model: AnalysisResult, as: 'AnalysisResults', required: false },
+        { model: MedicalImage, as: 'MedicalImages', attributes: ['id', 'filename', 'originalName', 'imageType', 'mimeType', 'createdAt'], required: false }
       ],
-      order: [[AnalysisResult, 'createdAt', 'ASC']]
+      order: [[{ model: AnalysisResult, as: 'AnalysisResults' }, 'createdAt', 'ASC']]
     });
     if (!analysis) return res.status(404).json({ error: 'Análise não encontrada' });
     res.json(analysis);
@@ -305,7 +305,7 @@ router.get('/:id/status', authenticate, async (req, res) => {
     const { id } = req.params;
     const analysis = await Analysis.findOne({
       where: { id, doctorId },
-      include: [{ model: AnalysisResult, attributes: ['id'], required: false }]
+      include: [{ model: AnalysisResult, as: 'AnalysisResults', attributes: ['id'], required: false }]
     });
     if (!analysis) return res.status(404).json({ error: 'Análise não encontrada' });
     res.json({

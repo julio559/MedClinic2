@@ -28,12 +28,6 @@ const REQUIRED_CATEGORIES = [
   'guia_prescricao'
 ];
 
-/**
- * Mantemos o schema e chaves para não quebrar a persistência.
- * O "diagnostico_principal.resultado" agora traz explicitamente:
- *   ### Características essenciais
- * com os critérios/achados-chave do caso.
- */
 const JSON_SCHEMA_TEXT = `
 Objeto JSON com 7 chaves obrigatórias:
 {
@@ -66,8 +60,13 @@ Regras de estilo e conteúdo:
 // =====================
 const processWithAI = async (analysisId) => {
   try {
+    // 🔧 usa os aliases definidos no model Analysis
     const analysis = await Analysis.findByPk(analysisId, {
-      include: [{ model: MedicalImage }, { model: Patient }]
+      include: [
+        { model: Patient, as: 'Patient' },
+        { model: AnalysisResult, as: 'AnalysisResults' },
+        { model: MedicalImage, as: 'MedicalImages' }
+      ]
     });
     if (!analysis) throw new Error('Análise não encontrada');
     if (!process.env.OPENAI_API_KEY) throw new Error('OPENAI_API_KEY ausente. Configure e tente novamente.');
@@ -163,7 +162,7 @@ const analyzeImages = async (medicalImages) => {
 
     for (const image of medicalImages) {
       try {
-        if (!fs.existsSync(image.filePath)) {
+        if (!image.filePath || !fs.existsSync(image.filePath)) {
           console.warn(`Arquivo não encontrado: ${image.filePath}`);
           continue;
         }
@@ -268,7 +267,7 @@ const performMedicalAnalysis = async (prompt, imageAnalysis) => {
     }
   }
 
-  // Sanitizar textos: remover * e - como marcadores, ajustar bullets e subtítulos
+  // Sanitizar textos
   data = sanitizeAndBeautifyResults(data);
 
   return data;
@@ -466,28 +465,16 @@ const tryParseJSON = (txt) => {
   try { return JSON.parse(txt); } catch { return null; }
 };
 
-// Converte bullets começando com - ou * para •, remove ênfases com * e melhora espaçamento
 function beautifyResultado(txt) {
   if (!txt) return txt;
   let s = String(txt);
-
-  // Remover ênfases markdown com * (itálico/negrito)
   s = s.replace(/\*\*(.*?)\*\*/g, '$1');
   s = s.replace(/\*(.*?)\*/g, '$1');
-
-  // Checklists/itens no início da linha: - ... ou * ...  -> • ...
   s = s.replace(/^[ \t]*[-*][ \t]+/gm, '• ');
   s = s.replace(/^[ \t]*[-*][ \t]*\[(?: |x|X)\][ \t]*/gm, '• ');
-
-  // Separadores (---) -> remove
   s = s.replace(/^\s*-{3,}\s*$/gm, '');
-
-  // Garantir linha em branco após subtítulos ###
   s = s.replace(/^(### .+)(\n)(?!\n)/gm, '$1\n');
-
-  // Compactar múltiplas linhas em branco
   s = s.replace(/\n{3,}/g, '\n\n');
-
   return s.trim();
 }
 
@@ -505,7 +492,7 @@ function sanitizeAndBeautifyResults(data) {
   return data;
 }
 
-// Retry simples com backoff exponencial + jitter para 429/5xx
+// Retry simples com backoff
 async function withRetries(fn, { tries = 4, baseMs = 800 } = {}) {
   let lastErr;
   for (let attempt = 1; attempt <= tries; attempt++) {
