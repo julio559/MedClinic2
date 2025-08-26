@@ -1,19 +1,32 @@
 // backend/src/models/index.js
 const fs = require('fs');
 const path = require('path');
-const mysql = require('mysql2'); // garante que mysql2 está instalado
+const mysql = require('mysql2');
 const { Sequelize, DataTypes } = require('sequelize');
 
-// Variáveis de ambiente
 const DB_NAME  = process.env.DB_NAME  || process.env.MYSQL_DATABASE || 'medclinic';
 const DB_USER  = process.env.DB_USER  || process.env.MYSQL_USER     || 'root';
-const DB_PASS  = process.env.DB_PASSWORD || process.env.MYSQL_PASSWORD || '';
+const DB_PASS  = process.env.DB_PASSWORD || process.env.DB_PASS || process.env.MYSQL_PASSWORD || '';
 const DB_HOST  = process.env.DB_HOST  || process.env.MYSQL_HOST     || '127.0.0.1';
 const DB_PORT  = Number(process.env.DB_PORT || process.env.MYSQL_PORT || 3306);
-const ICN      = process.env.INSTANCE_CONNECTION_NAME; // ex: project:region:instance
+const ICN      = process.env.INSTANCE_CONNECTION_NAME; // project:region:instance
+const SOCKET   = process.env.DB_SOCKET_PATH || (ICN ? `/cloudsql/${ICN}` : null);
 
-// Decide se vai usar socket (Cloud Run) ou TCP (local/dev)
-const useSocket = Boolean(ICN);
+// Se houver SOCKET (ICN ou DB_SOCKET_PATH), usamos Unix socket. Caso contrário, TCP.
+const useSocket = Boolean(SOCKET);
+
+console.log('[DBcfg] useSocket=', useSocket, 'socket=', SOCKET || '(none)');
+console.log('[DBcfg] name=', DB_NAME, 'user=', DB_USER);
+console.log('[DBcfg] host=', useSocket ? '(socket)' : DB_HOST, 'port=', useSocket ? '(socket)' : DB_PORT);
+console.log('[DBcfg] password set? ', DB_PASS ? `yes(len=${String(DB_PASS).length})` : 'NO');
+if (useSocket) {
+  console.log('[DBcfg] ICN=', ICN);
+  // Opcional: debug mount em Cloud Run
+  try {
+    console.log('[DBcfg] /cloudsql exists?', fs.existsSync('/cloudsql'));
+    if (SOCKET) console.log('[DBcfg] socket path exists?', fs.existsSync(SOCKET));
+  } catch {}
+}
 
 const sequelize = new Sequelize(DB_NAME, DB_USER, DB_PASS, {
   dialect: 'mysql',
@@ -22,29 +35,16 @@ const sequelize = new Sequelize(DB_NAME, DB_USER, DB_PASS, {
   define: { timestamps: true },
   pool: { max: 5, min: 0, acquire: 30000, idle: 10000 },
   retry: {
-    match: [
-      /ETIMEDOUT/,
-      /EHOSTUNREACH/,
-      /ECONNRESET/,
-      /SequelizeConnectionError/,
-    ],
+    match: [/ETIMEDOUT/, /EHOSTUNREACH/, /ECONNRESET/, /SequelizeConnectionError/],
     max: 3,
   },
   ...(useSocket
-    ? {
-        dialectOptions: {
-          socketPath: `/cloudsql/${ICN}`,
-          dateStrings: true,
-        },
-      }
-    : {
-        host: DB_HOST,
-        port: DB_PORT,
-        dialectOptions: { dateStrings: true },
-      }),
+    ? { dialectOptions: { socketPath: SOCKET, dateStrings: true } }
+    : { host: DB_HOST, port: DB_PORT, dialectOptions: { dateStrings: true } }
+  ),
 });
 
-// ---------- Carrega os models ----------
+// resto do loader de models...
 const db = {};
 const basename = path.basename(__filename);
 
@@ -53,22 +53,16 @@ fs.readdirSync(__dirname)
   .forEach((file) => {
     const mod = require(path.join(__dirname, file));
     try {
-      const model =
-        typeof mod === 'function'
-          ? mod(sequelize, DataTypes)
-          : mod.default?.(sequelize, DataTypes);
+      const model = typeof mod === 'function' ? mod(sequelize, DataTypes) : mod.default?.(sequelize, DataTypes);
       if (model?.name) db[model.name] = model;
     } catch (e) {
       console.error(`[models] Falha ao carregar ${file}:`, e.message);
     }
   });
 
-// ---------- Associações ----------
 Object.keys(db).forEach((name) => {
   if (typeof db[name].associate === 'function') {
-    try {
-      db[name].associate(db);
-    } catch (e) {
+    try { db[name].associate(db); } catch (e) {
       console.error(`[models] Falha ao associar ${name}:`, e.message);
     }
   }
@@ -76,5 +70,4 @@ Object.keys(db).forEach((name) => {
 
 db.sequelize = sequelize;
 db.Sequelize = Sequelize;
-
 module.exports = db;
