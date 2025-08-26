@@ -227,7 +227,10 @@ router.post('/register', async (req, res) => {
   }
 });
 
-
+router.get('/_ping', (req, res) => {
+  res.set('x-revision', process.env.K_REVISION || 'local');
+  res.json({ ok: true, revision: process.env.K_REVISION || 'local' });
+});
 // POST /api/auth/login
 router.post('/login', async (req, res) => {
   try {
