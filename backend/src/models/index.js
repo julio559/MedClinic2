@@ -1,73 +1,89 @@
-// backend/src/models/index.js
-const fs = require('fs');
+// backend/index.prod-db.js
+const express = require('express');
 const path = require('path');
-const mysql = require('mysql2');
-const { Sequelize, DataTypes } = require('sequelize');
+const fs = require('fs');
+const mysql = require('mysql2/promise');
 
-const DB_NAME  = process.env.DB_NAME  || process.env.MYSQL_DATABASE || 'medclinic';
-const DB_USER  = process.env.DB_USER  || process.env.MYSQL_USER     || 'root';
-const DB_PASS  = process.env.DB_PASSWORD || process.env.DB_PASS || process.env.MYSQL_PASSWORD || '';
-const DB_HOST  = process.env.DB_HOST  || process.env.MYSQL_HOST     || '127.0.0.1';
-const DB_PORT  = Number(process.env.DB_PORT || process.env.MYSQL_PORT || 3306);
-const ICN      = process.env.INSTANCE_CONNECTION_NAME; // project:region:instance
-const SOCKET   = process.env.DB_SOCKET_PATH || (ICN ? `/cloudsql/${ICN}` : null);
+const isProd = process.env.NODE_ENV === 'production';
 
-// Se houver SOCKET (ICN ou DB_SOCKET_PATH), usamos Unix socket. Caso contrário, TCP.
-const useSocket = Boolean(SOCKET);
-
-console.log('[DBcfg] useSocket=', useSocket, 'socket=', SOCKET || '(none)');
-console.log('[DBcfg] name=', DB_NAME, 'user=', DB_USER);
-console.log('[DBcfg] host=', useSocket ? '(socket)' : DB_HOST, 'port=', useSocket ? '(socket)' : DB_PORT);
-console.log('[DBcfg] password set? ', DB_PASS ? `yes(len=${String(DB_PASS).length})` : 'NO');
-if (useSocket) {
-  console.log('[DBcfg] ICN=', ICN);
-  // Opcional: debug mount em Cloud Run
-  try {
-    console.log('[DBcfg] /cloudsql exists?', fs.existsSync('/cloudsql'));
-    if (SOCKET) console.log('[DBcfg] socket path exists?', fs.existsSync(SOCKET));
-  } catch {}
+// Em dev/local, carregue backend/.env (ou .env.local se preferir)
+if (!isProd) {
+  const envPath = path.resolve(__dirname, '.env');
+  if (fs.existsSync(envPath)) {
+    require('dotenv').config({ path: envPath });
+    console.log('🔧 .env carregado de:', envPath);
+  }
 }
 
-const sequelize = new Sequelize(DB_NAME, DB_USER, DB_PASS, {
-  dialect: 'mysql',
-  dialectModule: mysql,
-  logging: false,
-  define: { timestamps: true },
-  pool: { max: 5, min: 0, acquire: 30000, idle: 10000 },
-  retry: {
-    match: [/ETIMEDOUT/, /EHOSTUNREACH/, /ECONNRESET/, /SequelizeConnectionError/],
-    max: 3,
-  },
-  ...(useSocket
-    ? { dialectOptions: { socketPath: SOCKET, dateStrings: true } }
-    : { host: DB_HOST, port: DB_PORT, dialectOptions: { dateStrings: true } }
-  ),
+const ICN       = process.env.INSTANCE_CONNECTION_NAME; // project:region:instance
+const DB_NAME   = process.env.DB_NAME;
+const DB_USER   = process.env.DB_USER;
+const DB_PASS   = process.env.DB_PASSWORD || process.env.DB_PASS;
+
+// Sanidade: todas as ENVs precisam existir
+function ensureEnv(name, val) {
+  if (!val) throw new Error(`ENV obrigatória ausente: ${name}`);
+}
+ensureEnv('DB_NAME', DB_NAME);
+ensureEnv('DB_USER', DB_USER);
+ensureEnv('DB_PASSWORD/DB_PASS', DB_PASS);
+
+// Escolha de rota de conexão (sempre PROD DB)
+const socketPath = ICN ? `/cloudsql/${ICN}` : null;
+const useSocket  = Boolean(socketPath);
+
+if (isProd) {
+  // Em produção: OBRIGATÓRIO usar socket
+  ensureEnv('INSTANCE_CONNECTION_NAME', ICN);
+  if (!fs.existsSync('/cloudsql')) {
+    throw new Error('Socket dir /cloudsql não está montado. Anexe a instância do Cloud SQL ao serviço.');
+  }
+}
+
+console.log('[DBcfg] mode     =', isProd ? 'prod' : 'local');
+console.log('[DBcfg] useSocket=', useSocket, 'socket=', socketPath || '(none)');
+console.log('[DBcfg] name     =', DB_NAME);
+console.log('[DBcfg] user     =', DB_USER);
+console.log('[DBcfg] pass?    =', DB_PASS ? `yes(len=${String(DB_PASS).length})` : 'NO');
+if (useSocket) {
+  console.log('[DBcfg] /cloudsql exists?', fs.existsSync('/cloudsql'));
+  console.log('[DBcfg] socket exists?   ', fs.existsSync(socketPath));
+}
+
+const app = express();
+
+// Cria pool (sempre apontando para o banco de prod)
+const poolConfig = useSocket
+  ? { socketPath, user: DB_USER, password: DB_PASS, database: DB_NAME }
+  : { host: '127.0.0.1', port: 3306, user: DB_USER, password: DB_PASS, database: DB_NAME };
+
+const pool = mysql.createPool({
+  ...poolConfig,
+  waitForConnections: true,
+  connectionLimit: 5,
+  queueLimit: 0,
 });
 
-// resto do loader de models...
-const db = {};
-const basename = path.basename(__filename);
-
-fs.readdirSync(__dirname)
-  .filter((file) => file !== basename && file.toLowerCase().endsWith('.js'))
-  .forEach((file) => {
-    const mod = require(path.join(__dirname, file));
-    try {
-      const model = typeof mod === 'function' ? mod(sequelize, DataTypes) : mod.default?.(sequelize, DataTypes);
-      if (model?.name) db[model.name] = model;
-    } catch (e) {
-      console.error(`[models] Falha ao carregar ${file}:`, e.message);
-    }
-  });
-
-Object.keys(db).forEach((name) => {
-  if (typeof db[name].associate === 'function') {
-    try { db[name].associate(db); } catch (e) {
-      console.error(`[models] Falha ao associar ${name}:`, e.message);
-    }
+app.get('/health', async (req, res) => {
+  try {
+    const [[v]] = await pool.query('SELECT VERSION() AS version');
+    const [[n]] = await pool.query('SELECT DATABASE() AS db');
+    const [[u]] = await pool.query('SELECT CURRENT_USER() AS user');
+    res.json({
+      ok: true,
+      mode: isProd ? 'prod' : 'local',
+      db: n.db,
+      mysql_version: v.version,
+      current_user: u.user,
+      via: useSocket ? 'unix-socket' : 'tcp-127.0.0.1:3306',
+      ts: new Date().toISOString(),
+    });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
   }
 });
 
-db.sequelize = sequelize;
-db.Sequelize = Sequelize;
-module.exports = db;
+const PORT = parseInt(process.env.PORT || '8080', 10);
+app.listen(PORT, '0.0.0.0', () => {
+  console.log(`🚀 prod-db index rodando em :${PORT} (rota: /health)`);
+});
