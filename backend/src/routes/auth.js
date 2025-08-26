@@ -71,6 +71,7 @@ function calcEndDate(duration_type, duration_value) {
 }
 
 // POST /api/auth/register
+// POST /api/auth/register
 router.post('/register', async (req, res) => {
   try {
     const data = await registerSchema.validateAsync(req.body, { abortEarly: false });
@@ -78,6 +79,7 @@ router.post('/register', async (req, res) => {
     const email = String(data.email).trim().toLowerCase();
     const crm = String(data.crm).trim();
 
+    // Verifica duplicidade
     const [existingEmail, existingCrm] = await Promise.all([
       User.findOne({ where: { email } }),
       User.findOne({ where: { crm } }),
@@ -90,7 +92,7 @@ router.post('/register', async (req, res) => {
     const user = await User.create({
       name: String(data.name).trim(),
       email,
-      passwordHash, // mapeia para coluna 'password'
+      passwordHash, // mapeado para coluna 'password'
       phone: data.phone ? String(data.phone).trim() : null,
       crm,
       specialty: data.specialty ? String(data.specialty).trim() : null,
@@ -98,11 +100,11 @@ router.post('/register', async (req, res) => {
       isActive: true
     });
 
-    // 🔹 Bootstrap opcional de assinatura (silencioso, não falha o registro)
+    // Cria assinatura trial silenciosa
     try {
       const hasSub = await Subscription.findOne({ where: { userId: user.id } });
       if (!hasSub) {
-        const plan = await getTrialPlan(); // trial ou primeiro ativo
+        const plan = await getTrialPlan();
         if (plan) {
           await Subscription.create({
             id: uuidv4(),
@@ -116,30 +118,44 @@ router.post('/register', async (req, res) => {
           });
         }
       }
-    } catch (e) {
-      console.error('register: falha ao criar assinatura trial (não bloqueia):', e?.message || e);
-      // segue sem travar o registro
+    } catch (subErr) {
+      console.error('[REGISTER][SUBSCRIPTION] Falha ao criar assinatura trial:', {
+        message: subErr.message,
+        stack: subErr.stack,
+        sql: subErr.sql,
+        fields: subErr.fields
+      });
     }
 
     const token = signToken(user.id);
     return res.status(200).json({ token, user: toSafeUser(user) });
+
   } catch (err) {
+    // 🟢 Logs explicativos
+    console.error('[REGISTER][ERROR]', {
+      name: err?.name,
+      message: err?.message,
+      stack: err?.stack,
+      fields: err?.fields,
+      errors: err?.errors,
+      sql: err?.sql
+    });
+
     if (err.isJoi) {
-      return res.status(400).json({ error: 'Dados inválidos', details: err.details.map(d => d.message) });
+      return res.status(400).json({
+        error: 'Validação de dados falhou',
+        details: err.details.map(d => d.message)
+      });
     }
     if (String(err.message).includes('JWT_SECRET')) {
-      console.error('Auth register error:', err.message);
-      return res.status(500).json({ error: 'Configuração do servidor ausente (JWT_SECRET)' });
+      return res.status(500).json({ error: 'Configuração ausente: JWT_SECRET' });
     }
     if (err?.name === 'SequelizeUniqueConstraintError') {
       const field = err.errors?.[0]?.path || 'campo único';
       return res.status(400).json({ error: `Valor já cadastrado para ${field}` });
     }
-    console.error('Auth register error:', {
-      name: err?.name, message: err?.message,
-      errors: err?.errors, fields: err?.fields, stack: err?.stack
-    });
-    return res.status(500).json({ error: 'Erro ao registrar usuário' });
+
+    return res.status(500).json({ error: 'Erro interno ao registrar usuário' });
   }
 });
 
