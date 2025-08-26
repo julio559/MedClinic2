@@ -10,30 +10,23 @@ const fs = require('fs');
 const util = require('util');
 
 /** =========================
- * 1) Carregar .env (backend/.env)
+ * 1) Carregar .env (somente em DEV)
  * ========================== */
 const isProd = process.env.NODE_ENV === 'production';
 (function loadEnv() {
-  const envPaths = [
-    path.resolve(__dirname, '..', '.env.local'), // preferencial em dev, se existir
-    path.resolve(__dirname, '..', '.env'),       // principal (como você pediu)
-  ];
-  // Em produção (Cloud Run), as variáveis vêm do serviço — não força arquivo
-  if (!isProd) {
-    for (const p of envPaths) {
-      if (fs.existsSync(p)) {
-        require('dotenv').config({ path: p });
-        console.log('🔧 .env carregado de:', p);
-        break;
-      }
-    }
-  } else {
-    // carrega .env padrão apenas se existir (não é necessário no Cloud Run)
-    const prodEnv = path.resolve(__dirname, '..', '.env');
-    if (fs.existsSync(prodEnv)) {
-      require('dotenv').config({ path: prodEnv });
-      console.log('🔧 (prod) .env carregado de:', prodEnv);
-    }
+  if (isProd) return; // Em produção (Cloud Run), NUNCA carregue .env de arquivo
+
+  // Em dev/local: tenta .env.local, senão .env (ambos em /backend)
+  const dotenv = require('dotenv');
+  const envLocal = path.resolve(__dirname, '..', '.env.local');
+  const envDefault = path.resolve(__dirname, '..', '.env');
+
+  if (fs.existsSync(envLocal)) {
+    dotenv.config({ path: envLocal });
+    console.log('🔧 .env carregado de:', envLocal);
+  } else if (fs.existsSync(envDefault)) {
+    dotenv.config({ path: envDefault });
+    console.log('🔧 .env carregado de:', envDefault);
   }
 })();
 
@@ -407,7 +400,7 @@ if (process.env.SKIP_DB === '1') {
       console.log('[DB] user   =', process.env.DB_USER);
       console.log('[DB] host   =', useSocket ? '(socket)' : process.env.DB_HOST);
       console.log('[DB] port   =', useSocket ? '(socket)' : process.env.DB_PORT);
-      console.log('[DB] pass?  =', process.env.DB_PASSWORD ? `yes(len=${String(process.env.DB_PASSWORD).length})` : 'NO');
+      console.log('[DB] pass?  =', (process.env.DB_PASSWORD || process.env.DB_PASS) ? 'yes' : 'NO');
 
       // 0) Autentica e diagnóstico
       await db.sequelize.authenticate();
