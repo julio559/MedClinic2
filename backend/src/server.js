@@ -8,8 +8,38 @@ const { Server } = require('socket.io');
 const path = require('path');
 const fs = require('fs');
 const util = require('util');
-require('dotenv').config();
 
+/** =========================
+ * 1) Carregar .env (backend/.env)
+ * ========================== */
+const isProd = process.env.NODE_ENV === 'production';
+(function loadEnv() {
+  const envPaths = [
+    path.resolve(__dirname, '..', '.env.local'), // preferencial em dev, se existir
+    path.resolve(__dirname, '..', '.env'),       // principal (como você pediu)
+  ];
+  // Em produção (Cloud Run), as variáveis vêm do serviço — não força arquivo
+  if (!isProd) {
+    for (const p of envPaths) {
+      if (fs.existsSync(p)) {
+        require('dotenv').config({ path: p });
+        console.log('🔧 .env carregado de:', p);
+        break;
+      }
+    }
+  } else {
+    // carrega .env padrão apenas se existir (não é necessário no Cloud Run)
+    const prodEnv = path.resolve(__dirname, '..', '.env');
+    if (fs.existsSync(prodEnv)) {
+      require('dotenv').config({ path: prodEnv });
+      console.log('🔧 (prod) .env carregado de:', prodEnv);
+    }
+  }
+})();
+
+/** =========================
+ * 2) DB e serviços auxiliares
+ * ========================== */
 const db = require('./models');
 
 // --- aiService com guard (se quebrar, não derruba o container) ---
@@ -21,6 +51,9 @@ try {
   console.error('⚠️  aiService não pôde ser carregado (seguindo sem IA):', e?.message);
 }
 
+/** =========================
+ * 3) App / Server / Socket.io
+ * ========================== */
 const app = express();
 const server = createServer(app);
 const io = new Server(server, {
@@ -30,24 +63,32 @@ const io = new Server(server, {
 // IO global
 global.socketIO = io;
 
-// Upload dir (ephemeral no Cloud Run)
+/** =========================
+ * 4) Uploads (ephemeral no Cloud Run)
+ * ========================== */
 const uploadDir = path.join(__dirname, 'uploads/medical-images');
 if (!fs.existsSync(uploadDir)) {
   fs.mkdirSync(uploadDir, { recursive: true });
   console.log('📁 Diretório de uploads criado:', uploadDir);
 }
 
-// Middlewares
+/** =========================
+ * 5) Middlewares
+ * ========================== */
 app.set('trust proxy', 1);
 app.use(helmet());
 app.use(cors());
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
-// Estáticos
+/** =========================
+ * 6) Estáticos
+ * ========================== */
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 
-// Rotas
+/** =========================
+ * 7) Rotas
+ * ========================== */
 const authRoutes = require('./routes/auth');
 const userRoutes = require('./routes/users');
 const patientRoutes = require('./routes/patients');
@@ -68,7 +109,9 @@ app.get('/_ping', (req, res) => {
   res.json({ ok: true, revision: rev });
 });
 
-// Health check (não bloqueante)
+/** =========================
+ * 8) Health check (não bloqueante)
+ * ========================== */
 app.get('/health', async (req, res) => {
   try {
     const openaiConfigured = validateOpenAIConfig();
@@ -132,7 +175,9 @@ app.get('/test', (req, res) => {
 
 const isDev = (process.env.NODE_ENV || 'development') !== 'production';
 
-/** ---------- Auxiliares de diagnóstico DB ---------- */
+/** =========================
+ * 9) Auxiliares de diagnóstico DB
+ * ========================== */
 async function hasColumn(sequelize, table, column) {
   const [rows] = await sequelize.query(
     `SELECT COUNT(*) as c
@@ -261,7 +306,9 @@ async function preSyncCleanupZeroDates(sequelize) {
   }
 }
 
-// Diag interno (apenas em dev)
+/** =========================
+ * 10) Diagnóstico em dev
+ * ========================== */
 if (isDev) {
   app.get('/_diag/db', async (req, res) => {
     try {
@@ -273,9 +320,9 @@ if (isDev) {
   });
 }
 
-/** ---------- Fim diagnósticos ---------- */
-
-// Erro global
+/** =========================
+ * 11) Erro global e 404
+ * ========================== */
 app.use((error, req, res, next) => {
   const payload = { error: 'Erro interno do servidor' };
 
@@ -302,16 +349,25 @@ app.use((error, req, res, next) => {
   res.status(500).json(payload);
 });
 
-// 404
 app.use('*', (req, res) => {
   res.status(404).json({
     error: 'Rota não encontrada',
     path: req.originalUrl,
-    availableEndpoints: ['GET /health', 'GET /test-openai', 'POST /api/auth/login', 'POST /api/auth/register', 'GET /api/patients', 'POST /api/analysis', 'GET /api/analysis'],
+    availableEndpoints: [
+      'GET /health',
+      'GET /test-openai',
+      'POST /api/auth/login',
+      'POST /api/auth/register',
+      'GET /api/patients',
+      'POST /api/analysis',
+      'GET /api/analysis',
+    ],
   });
 });
 
-// Socket.IO
+/** =========================
+ * 12) Socket.IO
+ * ========================== */
 io.on('connection', (socket) => {
   console.log('👨‍⚕️ Doctor connected:', socket.id);
   socket.on('join_doctor_room', (doctorId) => {
@@ -325,7 +381,9 @@ io.on('connection', (socket) => {
   socket.on('disconnect', () => console.log('👨‍⚕️ Doctor disconnected:', socket.id));
 });
 
-// --- Cloud Run/Containers: escute a porta ANTES de tocar no DB ---
+/** =========================
+ * 13) Startup do servidor
+ * ========================== */
 const PORT = parseInt(process.env.PORT || '8080', 10);
 server.listen(PORT, '0.0.0.0', () => {
   console.log('=====================================');
@@ -334,12 +392,23 @@ server.listen(PORT, '0.0.0.0', () => {
   console.log('=====================================\n');
 });
 
-// Inicialização do DB em background (skip opcional)
+/** =========================
+ * 14) Bootstrap do DB (background)
+ * ========================== */
 if (process.env.SKIP_DB === '1') {
   console.log('⏭️  SKIP_DB=1: pulando inicialização do banco');
 } else {
   (async () => {
     try {
+      // Logs de diagnóstico de ENV (sem vazar senha)
+      const useSocket = Boolean(process.env.INSTANCE_CONNECTION_NAME);
+      console.log('[DB] modo   =', useSocket ? 'socket(/cloudsql)' : 'tcp');
+      console.log('[DB] name   =', process.env.DB_NAME);
+      console.log('[DB] user   =', process.env.DB_USER);
+      console.log('[DB] host   =', useSocket ? '(socket)' : process.env.DB_HOST);
+      console.log('[DB] port   =', useSocket ? '(socket)' : process.env.DB_PORT);
+      console.log('[DB] pass?  =', process.env.DB_PASSWORD ? `yes(len=${String(process.env.DB_PASSWORD).length})` : 'NO');
+
       // 0) Autentica e diagnóstico
       await db.sequelize.authenticate();
       const baseDiag = await diagnoseDB(db.sequelize);
@@ -381,7 +450,9 @@ if (process.env.SKIP_DB === '1') {
   })();
 }
 
-// Captura erros não tratados
+/** =========================
+ * 15) Captura erros globais
+ * ========================== */
 process.on('unhandledRejection', (reason, p) => {
   console.error('🧨 Unhandled Rejection at:', p, '\nReason:', reason);
 });
