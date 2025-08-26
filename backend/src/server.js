@@ -347,6 +347,7 @@ app.use('*', (req, res) => {
     error: 'Rota não encontrada',
     path: req.originalUrl,
     availableEndpoints: [
+      'GET /teste1',
       'GET /health',
       'GET /test-openai',
       'POST /api/auth/login',
