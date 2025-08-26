@@ -23,7 +23,7 @@ async function authenticate(req, res, next) {
       return res.status(401).json({ error: 'Usuário inválido' });
     }
 
-    req.userId = user.id;
+    req.userId = user.id; // <- é isso que as rotas devem usar
     next();
   } catch (error) {
     console.error('Auth middleware error:', { name: error?.name, message: error?.message });
@@ -32,3 +32,4 @@ async function authenticate(req, res, next) {
 }
 
 module.exports = { authenticate };
+

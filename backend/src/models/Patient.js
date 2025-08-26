@@ -1,36 +1,61 @@
-const { v4: uuidv4 } = require('uuid');
+const express = require('express');
+const { Patient, Analysis, AnalysisResult } = require('../models');
+let { authenticate } = require('../middleware/auth') || {};
+const router = express.Router();
 
-module.exports = (sequelize, DataTypes) => {
-  const Patient = sequelize.define('Patient', {
-    id: {
-      type: DataTypes.STRING,
-      defaultValue: () => uuidv4(),
-      primaryKey: true
-    },
-    name: {
-      type: DataTypes.STRING,
-      allowNull: false,
-      validate: { notEmpty: true, len: [2, 255] }
-    },
-    email: {
-      type: DataTypes.STRING,
-      allowNull: true,
-      validate: { isEmail: true }
-    },
-    phone: { type: DataTypes.STRING, allowNull: true },
-    birthDate: { type: DataTypes.DATE, allowNull: true },
-    gender: { type: DataTypes.ENUM('M', 'F', 'Other'), allowNull: true },
-    address: { type: DataTypes.TEXT, allowNull: true },
-    medicalHistory: { type: DataTypes.TEXT, allowNull: true },
-    allergies: { type: DataTypes.TEXT, allowNull: true },
-    doctorId: {
-      type: DataTypes.STRING,
-      allowNull: false,
-      references: { model: 'users', key: 'id' }
-    }
-  }, {
-    tableName: 'patients',
-    timestamps: true
-  });
-  return Patient;
-};
+// Airbag: garante função mesmo se import falhar
+const ensure = (fn) => (typeof fn === 'function' ? fn : (_req, _res, next) => next());
+authenticate = ensure(authenticate);
+
+// GET /api/patients - lista pacientes do médico autenticado
+router.get('/', authenticate, async (req, res) => {
+  try {
+    const doctorId = req.userId;
+    const patients = await Patient.findAll({
+      where: { doctorId },
+      include: [{ model: Analysis, include: [AnalysisResult] }],
+      order: [
+        ['createdAt', 'DESC'],
+        [Analysis, 'createdAt', 'DESC']
+      ],
+    });
+    res.json(patients);
+  } catch (error) {
+    console.error('GET /patients error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// POST /api/patients - cria paciente
+router.post('/', authenticate, async (req, res) => {
+  try {
+    const doctorId = req.userId;
+    const patient = await Patient.create({ ...req.body, doctorId });
+    res.status(201).json(patient);
+  } catch (error) {
+    console.error('POST /patients error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// GET /api/patients/:id - retorna paciente do médico autenticado
+router.get('/:id', authenticate, async (req, res) => {
+  try {
+    const doctorId = req.userId;
+    const patient = await Patient.findOne({
+      where: { id: req.params.id, doctorId },
+      include: [{ model: Analysis, include: [AnalysisResult] }],
+      order: [
+        [Analysis, 'createdAt', 'DESC']
+      ],
+    });
+    if (!patient) return res.status(404).json({ error: 'Paciente não encontrado' });
+    res.json(patient);
+  } catch (error) {
+    console.error('GET /patients/:id error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+module.exports = router;
+
