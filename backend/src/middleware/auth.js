@@ -1,7 +1,7 @@
 const jwt = require('jsonwebtoken');
 const { User } = require('../models');
 
-module.exports = async function authenticate(req, res, next) {
+async function authenticate(req, res, next) {
   try {
     const auth = req.header('Authorization') || '';
     const [scheme, token] = auth.split(' ');
@@ -29,4 +29,6 @@ module.exports = async function authenticate(req, res, next) {
     console.error('Auth middleware error:', { name: error?.name, message: error?.message });
     return res.status(401).json({ error: 'Token inválido' });
   }
-};
+}
+
+module.exports = { authenticate };
