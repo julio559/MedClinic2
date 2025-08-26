@@ -7,7 +7,7 @@ const router = express.Router();
 router.get('/', authenticate, async (req, res) => {
   try {
     const patients = await Patient.findAll({
-      where: { doctorId: req.user.userId },
+      where: { doctorId: req.userId },
       include: [{ model: Analysis, include: [AnalysisResult] }],
       order: [['createdAt', 'DESC']]
     });
@@ -23,7 +23,7 @@ router.post('/', authenticate, async (req, res) => {
   try {
     const patient = await Patient.create({
       ...req.body,
-      doctorId: req.user.userId
+      doctorId: req.userId
     });
 
     res.status(201).json(patient);
@@ -36,7 +36,7 @@ router.post('/', authenticate, async (req, res) => {
 router.get('/:id', authenticate, async (req, res) => {
   try {
     const patient = await Patient.findOne({
-      where: { id: req.params.id, doctorId: req.user.userId },
+      where: { id: req.params.id, doctorId: req.userId },
       include: [{ model: Analysis, include: [AnalysisResult], order: [['createdAt', 'DESC']] }]
     });
 

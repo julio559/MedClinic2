@@ -266,7 +266,7 @@ router.get('/:planId', async (req, res) => {
  */
 router.post('/upgrade', authenticate, async (req, res) => {
   try {
-    const userId = req.user.userId;
+    const userId = req.userId;
     const { plan: planId } = req.body;
 
     const plan = await getPlanById(planId);
@@ -322,7 +322,7 @@ router.post('/upgrade', authenticate, async (req, res) => {
  */
 router.post('/cancel', authenticate, async (req, res) => {
   try {
-    const userId = req.user.userId;
+    const userId = req.userId;
     const subscription = await db.Subscription.findOne({ where: { userId } });
     if (!subscription) return res.status(404).json({ error: 'Assinatura não encontrada' });
 

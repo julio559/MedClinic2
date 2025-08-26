@@ -26,7 +26,7 @@ function toSafeUser(user) {
 }
 
 function getUserId(req) {
-  return req.userId || (req.user && req.user.userId) || null;
+  return req.userId || (req.user && req.userId) || null;
 }
 
 // GET /api/users/me
