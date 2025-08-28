@@ -36,7 +36,7 @@ const db = require('./models');
 let _aiSvc = null;
 function getAiSvc() {
   try {
-    if (!_aiSvc) _aiSvc = require('./services/aiService');
+    if (!_aiSvc) _aiSvc = require('/services/aiService');
     return _aiSvc;
   } catch (e) {
     console.warn('⚠️  aiService não pôde ser carregado agora:', e?.message || e);
