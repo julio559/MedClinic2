@@ -1,10 +1,13 @@
 // backend/src/routes/users.js
+/* eslint-disable no-console */
 const express = require('express');
 const bcrypt = require('bcryptjs');
 const { User, Patient, Analysis } = require('../models');
 
-const authModule = require('../middleware/auth');
-const authenticate = authModule.authenticate || authModule;
+// Middleware de auth (tolerante a fallback)
+let { authenticate } = require('../middleware/auth') || {};
+const ensure = (fn) => (typeof fn === 'function' ? fn : (_req, _res, next) => next());
+authenticate = ensure(authenticate);
 
 const router = express.Router();
 
@@ -138,16 +141,45 @@ router.get('/stats', authenticate, async (req, res) => {
     const doctorId = getUserId(req);
     if (!doctorId) return res.status(401).json({ error: 'Token inválido' });
 
-    const totalPatients = await Patient.count({ where: { doctorId } });
-    const totalAnalyses = await Analysis.count({ where: { doctorId } });
-    const completedAnalyses = await Analysis.count({ where: { doctorId, status: 'completed' } });
-    const processingAnalyses = await Analysis.count({ where: { doctorId, status: 'processing' } });
+    // Contagens
+    const [totalPatients, totalAnalyses, completedAnalyses, processingAnalyses] = await Promise.all([
+      Patient.count({ where: { doctorId } }),
+      Analysis.count({ where: { doctorId } }),
+      Analysis.count({ where: { doctorId, status: 'completed' } }),
+      Analysis.count({ where: { doctorId, status: 'processing' } }),
+    ]);
+
+    // Status da IA (sem criar cliente implicitamente)
+    let openai = { configured: false, connected: false, model_text: null, model_vision: null };
+    try {
+      const aiSvc = require('../services/aiService');
+      const configured = aiSvc.validateOpenAIConfig?.() || false;
+      let connected = false;
+      if (configured && aiSvc.testOpenAIConnection) {
+        connected = await Promise.race([
+          aiSvc.testOpenAIConnection().catch(() => false),
+          new Promise((r) => setTimeout(() => r(false), 2000)),
+        ]);
+      }
+      openai = {
+        configured,
+        connected,
+        model_text: process.env.OPENAI_TEXT_MODEL || 'gpt-4o',
+        model_vision: process.env.OPENAI_VISION_MODEL || process.env.OPENAI_TEXT_MODEL || 'gpt-4o',
+      };
+    } catch (e) {
+      console.warn('[/users/stats] aiService indisponível:', e?.message || e);
+    }
 
     return res.json({
-      totalAnalyses,
-      completedAnalyses,
-      processingAnalyses,
-      totalPatients,
+      totals: {
+        analyses: totalAnalyses,
+        analyses_completed: completedAnalyses,
+        analyses_processing: processingAnalyses,
+        patients: totalPatients,
+      },
+      openai,
+      timestamp: new Date().toISOString(),
     });
   } catch (e) {
     console.error('GET /users/stats error', e);

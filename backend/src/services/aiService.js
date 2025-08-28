@@ -1,3 +1,5 @@
+// backend/src/services/aiService.js
+/* eslint-disable no-console */
 console.log('[aiService] carregado - lazy OpenAI v2');
 
 const { Analysis, AnalysisResult, MedicalImage, Patient } = require('../models');
@@ -25,6 +27,20 @@ function getOpenAI() {
     _openai = new OpenAI({ apiKey: key });
   }
   return _openai;
+}
+
+/**
+ * Conexão Realtime SEMPRE com cliente injetado.
+ * Import dinâmico (ESM) para evitar side-effects no topo.
+ * @param {object} options - opções do connect() do SDK (ex.: model, url, transport, etc)
+ * @returns {Promise<any>} conexão/cliente retornado por connect()
+ */
+async function connectRealtime(options = {}) {
+  const { connect } = await import('openai/beta/realtime/ws');
+  return connect({
+    client: getOpenAI(), // injeta o singleton configurado
+    ...options,
+  });
 }
 
 // =====================
@@ -121,7 +137,7 @@ const processWithAI = async (analysisId) => {
 };
 
 // =====================
-// Prompt base (APrimorado)
+// Prompt base (Aprimorado)
 // =====================
 const buildMedicalPrompt = (analysis) => {
   const patient = analysis.Patient;
@@ -541,6 +557,7 @@ const validateOpenAIConfig = () => {
 // Exports
 // =====================
 module.exports = {
+  // públicos
   processWithAI,
   validateOpenAIConfig,
   testOpenAIConnection: async () => {
@@ -557,6 +574,9 @@ module.exports = {
     } catch {
       return false;
     }
-  }
-};
+  },
 
+  // novos helpers para evitar erros de cliente implícito
+  getOpenAIClient: () => getOpenAI(),
+  connectRealtime, // para qualquer uso do beta/realtime
+};
