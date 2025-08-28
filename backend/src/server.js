@@ -1,3 +1,6 @@
+
+console.log('[ENV] OPENAI_API_KEY presente?', !!process.env.OPENAI_API_KEY, 'len:', String(process.env.OPENAI_API_KEY || '').length);
+
 const express = require('express');
 const cors = require('cors');
 const helmet = require('helmet');
