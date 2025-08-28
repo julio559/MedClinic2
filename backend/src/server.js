@@ -35,8 +35,8 @@ const db = require('./models');
 // 🔹 Lazy do aiService (nada de require no boot)
 let _aiSvc = null;
 function getAiSvc() {
-  try {
-    if (!_aiSvc) _aiSvc = require('/services/aiService');
+  try { 
+    if (!_aiSvc) _aiSvc = require('./services/aiService');
     return _aiSvc;
   } catch (e) {
     console.warn('⚠️  aiService não pôde ser carregado agora:', e?.message || e);
