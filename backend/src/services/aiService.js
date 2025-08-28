@@ -1,6 +1,4 @@
-// src/services/aiService.js
-/* eslint-disable no-console */
-console.log('[aiService] carregado - lazy OpenAI v2');  // <- marque de versão
+console.log('[aiService] carregado - lazy OpenAI v2');
 
 const { Analysis, AnalysisResult, MedicalImage, Patient } = require('../models');
 const OpenAI = require('openai');
@@ -526,8 +524,8 @@ const validateOpenAIConfig = () => {
     console.error('❌ OPENAI_API_KEY não configurada no .env');
     return false;
   }
-  if (!/^sk-/.test(key)) {
-    console.error('❌ OPENAI_API_KEY inválida (deve começar com "sk-")');
+  if (!/^sk-/.test(key) && !/^sk-proj-/.test(key)) {
+    console.error('❌ OPENAI_API_KEY inválida (deve começar com "sk-" ou "sk-proj-")');
     return false;
   }
   console.log('✅ OpenAI configurada');
@@ -557,3 +555,4 @@ module.exports = {
     }
   }
 };
+

@@ -3,7 +3,18 @@ const multer = require('multer');
 const fs = require('fs');
 const path = require('path');
 const { Analysis, AnalysisResult, MedicalImage, Patient, Subscription } = require('../models');
-const { processWithAI } = require('../services/aiService');
+
+// 🔹 Lazy load do aiService (evita erro no boot se faltar OPENAI_API_KEY)
+let _aiService = null;
+function getAiServiceSafe() {
+  try {
+    if (!_aiService) _aiService = require('../services/aiService');
+    return _aiService;
+  } catch (e) {
+    console.warn('⚠️  aiService indisponível:', e?.message || e);
+    return null;
+  }
+}
 
 let { authenticate } = require('../middleware/auth') || {};
 const ensure = (fn) => (typeof fn === 'function' ? fn : (_req, _res, next) => next());
@@ -176,8 +187,13 @@ router.post(
 
       if (subscription) await subscription.increment('analysisUsed');
 
-      // background (usa os mesmos aliases dentro do aiService ao fazer includes!)
-      processWithAI(analysis.id).catch(err => console.error('❌ Erro no processamento de IA:', err));
+      // 🔹 Processamento com IA (se disponível)
+      const svc = getAiServiceSafe();
+      if (svc?.processWithAI) {
+        svc.processWithAI(analysis.id).catch(err => console.error('❌ Erro no processamento de IA:', err));
+      } else {
+        console.warn('⚠️  IA indisponível no momento — análise seguirá sem IA');
+      }
 
       res.status(201).json({
         message: 'Análise criada com sucesso',
@@ -290,7 +306,13 @@ router.post('/:id/reprocess', authenticate, async (req, res) => {
     await AnalysisResult.destroy({ where: { analysisId: id } });
     await analysis.update({ status: 'pending', aiConfidenceScore: null });
 
-    processWithAI(analysis.id).catch(err => console.error('❌ Erro no reprocessamento:', err));
+    const svc = getAiServiceSafe();
+    if (svc?.processWithAI) {
+      svc.processWithAI(analysis.id).catch(err => console.error('❌ Erro no reprocessamento:', err));
+    } else {
+      console.warn('⚠️  IA indisponível no reprocessamento');
+    }
+
     res.json({ message: 'Análise enviada para reprocessamento', analysis: { id: analysis.id, status: analysis.status } });
   } catch (error) {
     console.error('Error reprocessing analysis:', error);

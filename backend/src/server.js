@@ -1,4 +1,3 @@
-// backend/src/server.js
 const express = require('express');
 const cors = require('cors');
 const helmet = require('helmet');
@@ -15,12 +14,9 @@ const util = require('util');
 const isProd = process.env.NODE_ENV === 'production';
 (function loadEnv() {
   if (isProd) return; // Em produção (Cloud Run), NUNCA carregue .env de arquivo
-
-  // Em dev/local: tenta .env.local, senão .env (ambos em /backend)
   const dotenv = require('dotenv');
   const envLocal = path.resolve(__dirname, '..', '.env.local');
   const envDefault = path.resolve(__dirname, '..', '.env');
-
   if (fs.existsSync(envLocal)) {
     dotenv.config({ path: envLocal });
     console.log('🔧 .env carregado de:', envLocal);
@@ -33,15 +29,19 @@ const isProd = process.env.NODE_ENV === 'production';
 /** =========================
  * 2) DB e serviços auxiliares
  * ========================== */
+const isDev = (process.env.NODE_ENV || 'development') !== 'production';
 const db = require('./models');
 
-// --- aiService com guard (se quebrar, não derruba o container) ---
-let validateOpenAIConfig = () => false;
-let testOpenAIConnection = async () => false;
-try {
-  ({ validateOpenAIConfig, testOpenAIConnection } = require('./services/aiService'));
-} catch (e) {
-  console.error('⚠️  aiService não pôde ser carregado (seguindo sem IA):', e?.message);
+// 🔹 Lazy do aiService (nada de require no boot)
+let _aiSvc = null;
+function getAiSvc() {
+  try {
+    if (!_aiSvc) _aiSvc = require('./services/aiService');
+    return _aiSvc;
+  } catch (e) {
+    console.warn('⚠️  aiService não pôde ser carregado agora:', e?.message || e);
+    return null;
+  }
 }
 
 /** =========================
@@ -52,8 +52,6 @@ const server = createServer(app);
 const io = new Server(server, {
   cors: { origin: '*', methods: ['GET', 'POST', 'PUT', 'DELETE'] },
 });
-
-// IO global
 global.socketIO = io;
 
 /** =========================
@@ -107,11 +105,12 @@ app.get('/_ping', (req, res) => {
  * ========================== */
 app.get('/health', async (req, res) => {
   try {
-    const openaiConfigured = validateOpenAIConfig();
+    const svc = getAiSvc();
+    const openaiConfigured = svc?.validateOpenAIConfig?.() || false;
     let openaiConnection = false;
-    if (openaiConfigured) {
+    if (openaiConfigured && svc?.testOpenAIConnection) {
       openaiConnection = await Promise.race([
-        testOpenAIConnection().catch(() => false),
+        svc.testOpenAIConnection().catch(() => false),
         new Promise((r) => setTimeout(() => r(false), 2000)),
       ]);
     }
@@ -165,8 +164,6 @@ app.get('/test', (req, res) => {
     ],
   });
 });
-
-const isDev = (process.env.NODE_ENV || 'development') !== 'production';
 
 /** =========================
  * 9) Auxiliares de diagnóstico DB
@@ -302,6 +299,7 @@ async function preSyncCleanupZeroDates(sequelize) {
 /** =========================
  * 10) Diagnóstico em dev
  * ========================== */
+
 if (isDev) {
   app.get('/_diag/db', async (req, res) => {
     try {
@@ -318,7 +316,6 @@ if (isDev) {
  * ========================== */
 app.use((error, req, res, next) => {
   const payload = { error: 'Erro interno do servidor' };
-
   if (isDev) {
     payload.meta = {
       name: error?.name,
@@ -337,7 +334,6 @@ app.use((error, req, res, next) => {
     if (error?.sql) payload.meta.sql = error.sql;
     if (error?.parameters) payload.meta.parameters = error.parameters;
   }
-
   console.error('❌ Erro global:', util.inspect(error, { depth: 5, colors: true }));
   res.status(500).json(payload);
 });
@@ -394,7 +390,6 @@ if (process.env.SKIP_DB === '1') {
 } else {
   (async () => {
     try {
-      // Logs de diagnóstico de ENV (sem vazar senha)
       const useSocket = Boolean(process.env.INSTANCE_CONNECTION_NAME);
       console.log('[DB] modo   =', useSocket ? 'socket(/cloudsql)' : 'tcp');
       console.log('[DB] name   =', process.env.DB_NAME);
@@ -427,11 +422,12 @@ if (process.env.SKIP_DB === '1') {
         for (const t of tables) await ensureDatetimeDefaults(db.sequelize, t);
       }
 
-      // 4) Teste OpenAI (não bloqueia startup)
+      // 4) Teste OpenAI (não bloqueia startup) — lazy
       console.log('🔍 Verificando configuração da OpenAI...');
-      const openaiConfigured = validateOpenAIConfig();
-      if (openaiConfigured) {
-        const openaiConnected = await testOpenAIConnection();
+      const _svc = getAiSvc();
+      const openaiConfigured = _svc?.validateOpenAIConfig?.() || false;
+      if (openaiConfigured && _svc?.testOpenAIConnection) {
+        const openaiConnected = await _svc.testOpenAIConnection();
         console.log(openaiConnected ? '✅ OpenAI totalmente funcional' : '⚠️  OpenAI com problemas de conexão');
       } else {
         console.log('⚠️  OpenAI não configurada - modo limitado');
@@ -455,3 +451,4 @@ process.on('uncaughtException', (err) => {
 });
 
 module.exports = app;
+
