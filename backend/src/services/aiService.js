@@ -1,5 +1,7 @@
 // src/services/aiService.js
 /* eslint-disable no-console */
+console.log('[aiService] carregado - lazy OpenAI v2');  // <- marque de versão
+
 const { Analysis, AnalysisResult, MedicalImage, Patient } = require('../models');
 const OpenAI = require('openai');
 const fs = require('fs');
