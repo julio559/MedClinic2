@@ -11,9 +11,17 @@ const MODEL_TEXT   = process.env.OPENAI_TEXT_MODEL   || 'gpt-4o';
 const MODEL_VISION = process.env.OPENAI_VISION_MODEL || MODEL_TEXT;
 
 // =====================
-// OpenAI
+// OpenAI (instanciação lazy, tolerante)
 // =====================
-const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+let _openai; // singleton
+function getOpenAI() {
+  const key = process.env.OPENAI_API_KEY && String(process.env.OPENAI_API_KEY).trim();
+  if (!key) {
+    throw new Error('OPENAI_API_KEY ausente. Configure e tente novamente.');
+  }
+  if (!_openai) _openai = new OpenAI({ apiKey: key });
+  return _openai;
+}
 
 // =====================
 // Schema obrigatório (inalterado)
@@ -60,7 +68,6 @@ Regras de estilo e conteúdo:
 // =====================
 const processWithAI = async (analysisId) => {
   try {
-    // 🔧 usa os aliases definidos no model Analysis
     const analysis = await Analysis.findByPk(analysisId, {
       include: [
         { model: Patient, as: 'Patient' },
@@ -171,7 +178,7 @@ const analyzeImages = async (medicalImages) => {
         const mimeType = image.mimeType || 'image/jpeg';
 
         const response = await withRetries(() =>
-          openai.chat.completions.create({
+          getOpenAI().chat.completions.create({
             model: MODEL_VISION,
             messages: [
               {
@@ -279,7 +286,7 @@ const performMedicalAnalysis = async (prompt, imageAnalysis) => {
 async function callAIForJSON(userContent) {
   console.log('🧠 Solicitando JSON à IA com', MODEL_TEXT);
   const resp = await withRetries(() =>
-    openai.chat.completions.create({
+    getOpenAI().chat.completions.create({
       model: MODEL_TEXT,
       messages: [
         {
@@ -319,7 +326,7 @@ Responda SOMENTE com JSON válido.
 `.trim();
 
   const resp = await withRetries(() =>
-    openai.chat.completions.create({
+    getOpenAI().chat.completions.create({
       model: MODEL_TEXT,
       messages: [
         { role: "system", content: "Você repara JSONs para aderir estritamente ao schema. Responda apenas JSON. Sem * e -." },
@@ -359,7 +366,7 @@ ${tighten}
 `.trim();
 
   const resp = await withRetries(() =>
-    openai.chat.completions.create({
+    getOpenAI().chat.completions.create({
       model: MODEL_TEXT,
       messages: [
         { role: "system", content: "Você é IA médica; gere JSON estritamente válido conforme schema. Sem texto extra. Sem * e -." },
@@ -395,7 +402,7 @@ ${JSON.stringify(partialObj)}
 `.trim();
 
   const resp = await withRetries(() =>
-    openai.chat.completions.create({
+    getOpenAI().chat.completions.create({
       model: MODEL_TEXT,
       messages: [
         { role: "system", content: "Você completa JSONs médicos para aderir ao schema. Responda apenas JSON, sem * e -." },
@@ -536,7 +543,7 @@ module.exports = {
     try {
       if (!process.env.OPENAI_API_KEY) return false;
       const res = await withRetries(() =>
-        openai.chat.completions.create({
+        getOpenAI().chat.completions.create({
           model: MODEL_TEXT,
           messages: [{ role: "user", content: "Responda apenas: OK" }],
           max_tokens: 5
