@@ -15,11 +15,14 @@ const MODEL_VISION = process.env.OPENAI_VISION_MODEL || MODEL_TEXT;
 // =====================
 let _openai; // singleton
 function getOpenAI() {
-  const key = process.env.OPENAI_API_KEY && String(process.env.OPENAI_API_KEY).trim();
+  const key = (process.env.OPENAI_API_KEY || '').trim();
   if (!key) {
     throw new Error('OPENAI_API_KEY ausente. Configure e tente novamente.');
   }
-  if (!_openai) _openai = new OpenAI({ apiKey: key });
+  if (!_openai) {
+    const OpenAI = require('openai'); // <-- mover o require pra cá
+    _openai = new OpenAI({ apiKey: key }); // <-- só instancia quando realmente usar
+  }
   return _openai;
 }
 
